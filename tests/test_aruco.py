@@ -6,6 +6,12 @@ import numpy as np
 import pytest
 
 from height_mvp.aruco import detect_markers, validate_markers
+from height_mvp.geometry import (
+    calculate_pairwise_geometry,
+    estimate_cm_per_pixel,
+    estimate_homography,
+    transform_point,
+)
 from height_mvp.models import DetectedMarker, MarkerLayout
 
 
@@ -74,3 +80,97 @@ def test_rejects_duplicate_marker_ids():
 
     with pytest.raises(ValueError, match="duplicate"):
         validate_markers((marker, marker), make_layout())
+
+
+def test_calculates_pairwise_geometry():
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=((0.0, 0.0),) * 4,
+            center_x=center[0],
+            center_y=center[1],
+            area_px=1.0,
+        )
+        for marker_id, center in enumerate(((0.0, 0.0), (3.0, 4.0), (0.0, 5.0), (3.0, 9.0)))
+    )
+
+    geometry = calculate_pairwise_geometry(markers, make_layout())
+
+    assert len(geometry) == 6
+    assert geometry[0].first_id == 0
+    assert geometry[0].second_id == 1
+    assert geometry[0].pixel_delta == (3.0, 4.0)
+    assert geometry[0].pixel_distance == 5.0
+    assert geometry[0].physical_distance_cm == 1.0
+
+
+def test_estimates_cm_per_pixel():
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=((0.0, 0.0),) * 4,
+            center_x=marker_id * 10.0,
+            center_y=0.0,
+            area_px=1.0,
+        )
+        for marker_id in range(4)
+    )
+
+    geometry = calculate_pairwise_geometry(markers, make_layout())
+
+    assert estimate_cm_per_pixel(geometry) == 0.1
+
+
+def test_rejects_geometry_without_a_valid_scale_pair():
+    with pytest.raises(ValueError, match="could not estimate scale"):
+        estimate_cm_per_pixel(())
+
+
+def test_estimates_homography_and_transforms_points():
+    layout = MarkerLayout.from_dict(
+        {
+            "dictionary": "DICT_4X4_50",
+            "marker_size_cm": 18,
+            "markers": [
+                {"id": 0, "name": "a", "x_cm": 0, "y_cm": 0},
+                {"id": 1, "name": "b", "x_cm": 100, "y_cm": 0},
+                {"id": 2, "name": "c", "x_cm": 0, "y_cm": 150},
+                {"id": 3, "name": "d", "x_cm": 100, "y_cm": 150},
+            ],
+        }
+    )
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=((0.0, 0.0),) * 4,
+            center_x=center[0],
+            center_y=center[1],
+            area_px=1.0,
+        )
+        for marker_id, center in enumerate(
+            ((50.0, 40.0), (250.0, 40.0), (50.0, 340.0), (250.0, 340.0))
+        )
+    )
+
+    result = estimate_homography(markers, layout)
+
+    assert result.reprojection_error_cm < 0.0001
+    assert transform_point((50.0, 40.0), result.matrix) == pytest.approx((0.0, 0.0))
+    assert transform_point((250.0, 340.0), result.matrix) == pytest.approx((100.0, 150.0))
+
+
+def test_rejects_homography_with_too_few_layout_points():
+    layout = MarkerLayout.from_dict(
+        {
+            "dictionary": "DICT_4X4_50",
+            "marker_size_cm": 18,
+            "markers": [
+                {"id": 0, "name": "a", "x_cm": 0, "y_cm": 0},
+                {"id": 1, "name": "b", "x_cm": 1, "y_cm": 0},
+                {"id": 2, "name": "c", "x_cm": 0, "y_cm": 1},
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="at least four"):
+        estimate_homography((), layout)

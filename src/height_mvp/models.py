@@ -30,6 +30,43 @@ class DetectedMarker:
 
 
 @dataclass(frozen=True)
+class MarkerPairGeometry:
+    first_id: int
+    second_id: int
+    pixel_delta: tuple[float, float]
+    physical_delta_cm: tuple[float, float]
+    pixel_distance: float
+    physical_distance_cm: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "first_id": self.first_id,
+            "second_id": self.second_id,
+            "pixel_delta": [round(value, 2) for value in self.pixel_delta],
+            "physical_delta_cm": [
+                round(value, 2) for value in self.physical_delta_cm
+            ],
+            "pixel_distance": round(self.pixel_distance, 2),
+            "physical_distance_cm": round(self.physical_distance_cm, 2),
+        }
+
+
+@dataclass(frozen=True)
+class HomographyResult:
+    matrix: tuple[tuple[float, float, float], ...]
+    reprojection_error_cm: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "matrix": [
+                [round(value, 8) for value in row]
+                for row in self.matrix
+            ],
+            "reprojection_error_cm": round(self.reprojection_error_cm, 6),
+        }
+
+
+@dataclass(frozen=True)
 class MarkerLayout:
     dictionary: str
     marker_size_cm: float

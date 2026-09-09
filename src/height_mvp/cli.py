@@ -5,6 +5,11 @@ from typing import Sequence
 
 from . import __version__
 from .aruco import detect_markers, validate_markers
+from .geometry import (
+    calculate_pairwise_geometry,
+    estimate_cm_per_pixel,
+    estimate_homography,
+)
 from .models import MarkerLayout
 
 
@@ -36,16 +41,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_markers(markers, layout)
         except ValueError as error:
             build_parser().error(str(error))
+        geometry = calculate_pairwise_geometry(markers, layout)
+        cm_per_pixel = estimate_cm_per_pixel(geometry)
+        homography = estimate_homography(markers, layout)
         result = {
             "image": str(args.image),
             "markers": [marker.to_dict() for marker in markers],
+            "geometry": [measurement.to_dict() for measurement in geometry],
+            "scale": {
+                "cm_per_pixel": round(cm_per_pixel, 6),
+                "pixels_per_cm": round(1 / cm_per_pixel, 2),
+            },
+            "homography": homography.to_dict(),
         }
         output = json.dumps(result, indent=2)
         if args.output is None:
             print(output)
         else:
             args.output.write_text(output + "\n", encoding="utf-8")
-            print(f"Wrote {len(markers)} markers to {args.output}")
+            print(
+                f"Wrote {len(markers)} markers, {len(geometry)} pairs, "
+                f"scale {cm_per_pixel:.6f} cm/pixel, "
+                f"reprojection error {homography.reprojection_error_cm:.6f} cm "
+                f"to {args.output}"
+            )
         return 0
 
     print(f"Loaded {len(layout.markers)} markers from {args.layout}")
