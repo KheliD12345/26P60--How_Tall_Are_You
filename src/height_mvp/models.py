@@ -67,6 +67,25 @@ class HomographyResult:
 
 
 @dataclass(frozen=True)
+class CalibrationResult:
+    markers: tuple[DetectedMarker, ...]
+    geometry: tuple[MarkerPairGeometry, ...]
+    cm_per_pixel: float
+    homography: HomographyResult
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "markers": [marker.to_dict() for marker in self.markers],
+            "geometry": [pair.to_dict() for pair in self.geometry],
+            "scale": {
+                "cm_per_pixel": round(self.cm_per_pixel, 6),
+                "pixels_per_cm": round(1 / self.cm_per_pixel, 2),
+            },
+            "homography": self.homography.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class MarkerLayout:
     dictionary: str
     marker_size_cm: float
