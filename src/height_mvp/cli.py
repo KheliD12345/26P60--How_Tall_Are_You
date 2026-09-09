@@ -4,13 +4,9 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
-from .aruco import detect_markers, validate_markers
-from .geometry import (
-    calculate_pairwise_geometry,
-    estimate_cm_per_pixel,
-    estimate_homography,
-)
+from .calibration import calibrate_image
 from .models import MarkerLayout
+from .visualization import write_calibration_overlay
 
 
 DEFAULT_LAYOUT = Path(__file__).resolve().parents[2] / "configs" / "marker_layout.json"
@@ -29,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("image", nargs="?", type=Path)
     parser.add_argument("--output", type=Path, help="path for detection JSON")
+    parser.add_argument("--overlay", type=Path, help="path for calibration overlay")
     return parser
 
 
@@ -36,23 +33,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     layout = MarkerLayout.from_json(args.layout)
     if args.image is not None:
-        markers = detect_markers(args.image, layout)
         try:
-            validate_markers(markers, layout)
+            calibration = calibrate_image(args.image, layout)
+            if args.overlay is not None:
+                write_calibration_overlay(args.image, calibration, args.overlay)
         except ValueError as error:
             build_parser().error(str(error))
-        geometry = calculate_pairwise_geometry(markers, layout)
-        cm_per_pixel = estimate_cm_per_pixel(geometry)
-        homography = estimate_homography(markers, layout)
         result = {
             "image": str(args.image),
-            "markers": [marker.to_dict() for marker in markers],
-            "geometry": [measurement.to_dict() for measurement in geometry],
-            "scale": {
-                "cm_per_pixel": round(cm_per_pixel, 6),
-                "pixels_per_cm": round(1 / cm_per_pixel, 2),
-            },
-            "homography": homography.to_dict(),
+            **calibration.to_dict(),
         }
         output = json.dumps(result, indent=2)
         if args.output is None:
@@ -60,11 +49,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             args.output.write_text(output + "\n", encoding="utf-8")
             print(
-                f"Wrote {len(markers)} markers, {len(geometry)} pairs, "
-                f"scale {cm_per_pixel:.6f} cm/pixel, "
-                f"reprojection error {homography.reprojection_error_cm:.6f} cm "
+                f"Wrote {len(calibration.markers)} markers, "
+                f"{len(calibration.geometry)} pairs, "
+                f"scale {calibration.cm_per_pixel:.6f} cm/pixel, "
+                f"reprojection error "
+                f"{calibration.homography.reprojection_error_cm:.6f} cm "
                 f"to {args.output}"
             )
+        if args.overlay is not None:
+            print(f"Wrote calibration overlay to {args.overlay}")
         return 0
 
     print(f"Loaded {len(layout.markers)} markers from {args.layout}")
