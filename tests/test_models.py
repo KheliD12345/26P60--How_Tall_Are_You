@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from height_mvp.models import MarkerLayout
+from height_mvp.models import DetectedMarker, MarkerLayout
 
 
 LAYOUT_PATH = Path(__file__).parents[1] / "configs" / "marker_layout.json"
@@ -28,3 +28,16 @@ def test_rejects_duplicate_marker_ids():
 
     with pytest.raises(ValueError, match="unique"):
         MarkerLayout.from_dict(data)
+
+
+def test_serializes_detected_marker():
+    marker = DetectedMarker(
+        id=4,
+        corners=((1.123, 2.456), (3.0, 4.0), (5.0, 6.0), (7.0, 8.0)),
+        center_x=4.0,
+        center_y=5.0,
+        area_px=36.0,
+    )
+
+    assert marker.to_dict()["center"] == [4.0, 5.0]
+    assert marker.to_dict()["corners"][0] == [1.12, 2.46]

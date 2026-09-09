@@ -13,6 +13,23 @@ class MarkerPosition:
 
 
 @dataclass(frozen=True)
+class DetectedMarker:
+    id: int
+    corners: tuple[tuple[float, float], ...]
+    center_x: float
+    center_y: float
+    area_px: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "corners": [[round(x, 2), round(y, 2)] for x, y in self.corners],
+            "center": [round(self.center_x, 2), round(self.center_y, 2)],
+            "area_px": round(self.area_px, 2),
+        }
+
+
+@dataclass(frozen=True)
 class MarkerLayout:
     dictionary: str
     marker_size_cm: float
