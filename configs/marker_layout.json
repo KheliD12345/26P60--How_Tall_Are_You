@@ -1,0 +1,10 @@
+{
+  "dictionary": "DICT_4X4_50",
+  "marker_size_cm": 18.0,
+  "markers": [
+    {"id": 0, "name": "top_left", "x_cm": 0.0, "y_cm": 168.4},
+    {"id": 1, "name": "top_right", "x_cm": 91.5, "y_cm": 168.4},
+    {"id": 2, "name": "bottom_left", "x_cm": 0.0, "y_cm": 0.0},
+    {"id": 3, "name": "bottom_right", "x_cm": 91.5, "y_cm": 0.0}
+  ]
+}
