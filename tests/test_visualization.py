@@ -3,13 +3,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from height_mvp.models import (
+from height_estimation.models import (
     CalibrationResult,
     DetectedMarker,
     HomographyResult,
     MarkerPairGeometry,
 )
-from height_mvp.visualization import write_calibration_overlay
+from height_estimation.visualization import write_calibration_overlay
 
 
 def make_calibration() -> CalibrationResult:

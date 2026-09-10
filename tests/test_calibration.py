@@ -3,8 +3,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from height_mvp.calibration import calibrate_image
-from height_mvp.models import MarkerLayout
+from height_estimation.calibration import calibrate_image
+from height_estimation.models import MarkerLayout
 
 
 def make_layout() -> MarkerLayout:

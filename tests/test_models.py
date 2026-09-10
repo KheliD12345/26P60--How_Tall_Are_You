@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from height_mvp.models import DetectedMarker, MarkerLayout
+from height_estimation.models import DetectedMarker, MarkerLayout
 
 
 LAYOUT_PATH = Path(__file__).parents[1] / "configs" / "marker_layout.json"

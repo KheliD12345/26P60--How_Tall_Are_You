@@ -5,14 +5,14 @@ import numpy as np
 
 import pytest
 
-from height_mvp.aruco import detect_markers, validate_markers
-from height_mvp.geometry import (
+from height_estimation.aruco import detect_markers, validate_markers
+from height_estimation.geometry import (
     calculate_pairwise_geometry,
     estimate_cm_per_pixel,
     estimate_homography,
     transform_point,
 )
-from height_mvp.models import DetectedMarker, MarkerLayout
+from height_estimation.models import DetectedMarker, MarkerLayout
 
 
 def make_layout() -> MarkerLayout:

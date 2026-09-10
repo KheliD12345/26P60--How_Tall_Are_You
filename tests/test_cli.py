@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from height_mvp.cli import main
-from height_mvp.models import (
+from height_estimation.cli import main
+from height_estimation.models import (
     CalibrationResult,
     DetectedMarker,
     HomographyResult,
@@ -68,7 +68,7 @@ def test_cli_writes_detection_json(tmp_path, monkeypatch, capsys):
         for marker_id in range(4)
     )
     calibration = make_calibration_result(markers)
-    monkeypatch.setattr("height_mvp.cli.calibrate_image", lambda image, layout: calibration)
+    monkeypatch.setattr("height_estimation.cli.calibrate_image", lambda image, layout: calibration)
     image_path = tmp_path / "image.jpg"
     layout_path = tmp_path / "layout.json"
     output_path = tmp_path / "detections.json"
@@ -106,9 +106,9 @@ def test_cli_writes_requested_overlay(tmp_path, monkeypatch, capsys):
     )
     calibration = make_calibration_result(markers)
     calls = []
-    monkeypatch.setattr("height_mvp.cli.calibrate_image", lambda image, layout: calibration)
+    monkeypatch.setattr("height_estimation.cli.calibrate_image", lambda image, layout: calibration)
     monkeypatch.setattr(
-        "height_mvp.cli.write_calibration_overlay",
+        "height_estimation.cli.write_calibration_overlay",
         lambda image, result, output: calls.append((image, result, output)),
     )
     image_path = tmp_path / "image.jpg"
@@ -123,7 +123,7 @@ def test_cli_writes_requested_overlay(tmp_path, monkeypatch, capsys):
 
 def test_cli_rejects_missing_markers(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
-        "height_mvp.cli.calibrate_image",
+        "height_estimation.cli.calibrate_image",
         lambda image, layout: (_ for _ in ()).throw(
             ValueError("missing required ArUco markers: 1, 2, 3")
         ),
