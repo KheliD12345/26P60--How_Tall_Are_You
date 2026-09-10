@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "height-mvp"
+name = "height-estimation"
 version = "0.1.0"
 description = "Simple computer vision tools for metric height estimation"
 requires-python = ">=3.12"
@@ -16,7 +16,7 @@ dependencies = [
 test = ["pytest>=8,<9"]
 
 [project.scripts]
-height-mvp = "height_mvp.cli:main"
+height-estimation = "height_estimation.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

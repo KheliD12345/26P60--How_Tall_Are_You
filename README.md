@@ -1,3 +1,3 @@
-# Height MVP
+# Height Estimation
 
 This project estimates human height from photographs using printed ArUco markers and image geometry.

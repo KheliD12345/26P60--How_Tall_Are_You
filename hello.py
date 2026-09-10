@@ -1,4 +1,4 @@
-from height_mvp.cli import main
+from height_estimation.cli import main
 
 
 if __name__ == "__main__":
