@@ -2,8 +2,15 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from height_estimation.person import detect_person_endpoints, select_person_candidate
+
+
+SAMPLE_IMAGES = [
+    Path(__file__).parents[1] / "test-khelan.jpg",
+    Path(__file__).parents[1] / "test-shriya.jpg",
+]
 
 
 def test_selects_largest_useful_full_body_candidate():
@@ -61,3 +68,17 @@ def test_endpoints_are_ordered_and_inside_image_bounds(tmp_path, monkeypatch):
     assert 0 <= result.top_of_head[1] < 200
     assert 0 <= result.bottom_of_feet[0] < 160
     assert 0 <= result.bottom_of_feet[1] < 200
+
+
+@pytest.mark.parametrize("image_path", SAMPLE_IMAGES)
+def test_detects_person_endpoints_in_sample_image(image_path):
+    image = cv2.imread(str(image_path))
+    result = detect_person_endpoints(image_path)
+
+    assert image is not None
+    assert result is not None
+    assert result.top_of_head[1] < result.bottom_of_feet[1]
+    image_height, image_width = image.shape[:2]
+    for point in (result.top_of_head, result.bottom_of_feet):
+        assert 0 <= point[0] < image_width
+        assert 0 <= point[1] < image_height
