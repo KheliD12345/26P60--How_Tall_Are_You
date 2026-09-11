@@ -8,6 +8,7 @@ from height_estimation.models import (
     DetectedMarker,
     HomographyResult,
     MarkerPairGeometry,
+    PersonEndpoints,
 )
 
 
@@ -93,7 +94,51 @@ def test_cli_writes_detection_json(tmp_path, monkeypatch, capsys):
     assert len(result["geometry"]) == 6
     assert result["scale"]["cm_per_pixel"] == 0.1
     assert result["homography"]["reprojection_error_cm"] < 0.0001
+    assert result["person"] is None
     assert "reprojection error" in capsys.readouterr().out
+
+
+def test_cli_writes_person_endpoints(tmp_path, monkeypatch, capsys):
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=((1.0, 2.0),) * 4,
+            center_x=marker_id,
+            center_y=marker_id,
+            area_px=1.0,
+        )
+        for marker_id in range(4)
+    )
+    calibration = CalibrationResult(
+        markers=markers,
+        geometry=(),
+        cm_per_pixel=0.1,
+        homography=HomographyResult(
+            matrix=((1.0, 0.0, 0.0),) * 3,
+            reprojection_error_cm=0.0,
+        ),
+        person=PersonEndpoints(
+            box=(10, 20, 80, 180),
+            top_of_head=(50.0, 20.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=1.23,
+        ),
+    )
+    monkeypatch.setattr(
+        "height_estimation.cli.calibrate_image",
+        lambda image, layout: calibration,
+    )
+    image_path = tmp_path / "image.jpg"
+    output_path = tmp_path / "detections.json"
+    image_path.write_bytes(b"image")
+
+    assert main(
+        [str(image_path), "--output", str(output_path)]
+    ) == 0
+
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["person"]["top_of_head"] == [50.0, 20.0]
+    assert result["person"]["bottom_of_feet"] == [50.0, 199.0]
 
 
 def test_cli_writes_requested_overlay(tmp_path, monkeypatch, capsys):
