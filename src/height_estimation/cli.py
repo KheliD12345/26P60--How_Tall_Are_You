@@ -24,8 +24,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to a marker layout JSON file",
     )
     parser.add_argument("image", nargs="?", type=Path)
-    parser.add_argument("--output", type=Path, help="path for detection JSON")
-    parser.add_argument("--overlay", type=Path, help="path for calibration overlay")
+    parser.add_argument(
+        "--output", type=Path, help="path for detection JSON"
+    )
+    parser.add_argument(
+        "--overlay", type=Path, help="path for calibration overlay"
+    )
     return parser
 
 
