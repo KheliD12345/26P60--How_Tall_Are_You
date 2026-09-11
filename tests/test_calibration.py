@@ -42,3 +42,4 @@ def test_calibrates_image_in_one_result(tmp_path):
     assert result.cm_per_pixel == 0.2
     assert result.homography.reprojection_error_cm < 0.0001
     assert result.to_dict()["scale"]["pixels_per_cm"] == 5.0
+    assert result.person is None

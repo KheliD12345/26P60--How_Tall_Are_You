@@ -7,6 +7,7 @@ from .geometry import (
     estimate_homography,
 )
 from .models import CalibrationResult, MarkerLayout
+from .person import detect_person_endpoints
 
 
 def calibrate_image(
@@ -18,9 +19,11 @@ def calibrate_image(
     geometry = calculate_pairwise_geometry(markers, layout)
     cm_per_pixel = estimate_cm_per_pixel(geometry)
     homography = estimate_homography(markers, layout)
+    person = detect_person_endpoints(image_path)
     return CalibrationResult(
         markers=markers,
         geometry=geometry,
         cm_per_pixel=cm_per_pixel,
         homography=homography,
+        person=person,
     )

@@ -93,6 +93,7 @@ class CalibrationResult:
     geometry: tuple[MarkerPairGeometry, ...]
     cm_per_pixel: float
     homography: HomographyResult
+    person: PersonEndpoints | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -103,6 +104,7 @@ class CalibrationResult:
                 "pixels_per_cm": round(1 / self.cm_per_pixel, 2),
             },
             "homography": self.homography.to_dict(),
+            "person": self.person.to_dict() if self.person else None,
         }
 
 
