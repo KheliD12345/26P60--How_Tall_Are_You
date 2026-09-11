@@ -92,9 +92,8 @@ def estimate_homography(
     if matrix is None:
         raise ValueError("could not calculate marker homography")
 
-    projected_points = cv2.perspectiveTransform(
-        pixel_points.reshape(-1, 1, 2), matrix
-    ).reshape(-1, 2)
+    projected_points = cv2.perspectiveTransform(pixel_points.reshape(-1, 1, 2), matrix)
+    projected_points = projected_points.reshape(-1, 2)
     errors = np.linalg.norm(projected_points - physical_points, axis=1)
     return HomographyResult(
         matrix=tuple(tuple(float(value) for value in row) for row in matrix),
