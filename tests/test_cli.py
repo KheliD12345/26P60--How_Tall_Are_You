@@ -68,7 +68,10 @@ def test_cli_writes_detection_json(tmp_path, monkeypatch, capsys):
         for marker_id in range(4)
     )
     calibration = make_calibration_result(markers)
-    monkeypatch.setattr("height_estimation.cli.calibrate_image", lambda image, layout: calibration)
+    monkeypatch.setattr(
+        "height_estimation.cli.calibrate_image",
+        lambda image, layout: calibration,
+    )
     image_path = tmp_path / "image.jpg"
     layout_path = tmp_path / "layout.json"
     output_path = tmp_path / "detections.json"

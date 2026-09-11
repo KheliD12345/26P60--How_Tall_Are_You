@@ -79,7 +79,10 @@ def estimate_homography(
 
     pixel_points = np.array(
         [
-            [detected_by_id[marker.id].center_x, detected_by_id[marker.id].center_y]
+            [
+                detected_by_id[marker.id].center_x,
+                detected_by_id[marker.id].center_y,
+            ]
             for marker in layout.markers
         ],
         dtype=np.float32,

@@ -23,7 +23,9 @@ class DetectedMarker:
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
-            "corners": [[round(x, 2), round(y, 2)] for x, y in self.corners],
+            "corners": [
+                [round(x, 2), round(y, 2)] for x, y in self.corners
+            ],
             "center": [round(self.center_x, 2), round(self.center_y, 2)],
             "area_px": round(self.area_px, 2),
         }
@@ -42,7 +44,9 @@ class MarkerPairGeometry:
         return {
             "first_id": self.first_id,
             "second_id": self.second_id,
-            "pixel_delta": [round(value, 2) for value in self.pixel_delta],
+            "pixel_delta": [
+                round(value, 2) for value in self.pixel_delta
+            ],
             "physical_delta_cm": [
                 round(value, 2) for value in self.physical_delta_cm
             ],
@@ -59,8 +63,7 @@ class HomographyResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "matrix": [
-                [round(value, 8) for value in row]
-                for row in self.matrix
+                [round(value, 8) for value in row] for row in self.matrix
             ],
             "reprojection_error_cm": round(self.reprojection_error_cm, 6),
         }
