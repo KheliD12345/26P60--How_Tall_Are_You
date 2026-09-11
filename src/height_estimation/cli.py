@@ -39,10 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 write_calibration_overlay(args.image, calibration, args.overlay)
         except ValueError as error:
             build_parser().error(str(error))
-        result = {
-            "image": str(args.image),
-            **calibration.to_dict(),
-        }
+        result = {"image": str(args.image), **calibration.to_dict()}
         output = json.dumps(result, indent=2)
         if args.output is None:
             print(output)
