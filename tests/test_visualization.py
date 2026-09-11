@@ -8,6 +8,7 @@ from height_estimation.models import (
     DetectedMarker,
     HomographyResult,
     MarkerPairGeometry,
+    PersonEndpoints,
 )
 from height_estimation.visualization import write_calibration_overlay
 
@@ -61,6 +62,40 @@ def test_writes_calibration_overlay(tmp_path):
     assert overlay is not None
     assert overlay.shape == image.shape
     assert np.any(overlay != 255)
+
+
+def test_adds_person_endpoint_annotations(tmp_path):
+    image_path = tmp_path / "image.png"
+    without_person_path = tmp_path / "without-person.png"
+    with_person_path = tmp_path / "with-person.png"
+    image = np.full((100, 100, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+
+    write_calibration_overlay(
+        image_path,
+        make_calibration(),
+        without_person_path,
+    )
+    calibration = make_calibration()
+    calibration = CalibrationResult(
+        markers=calibration.markers,
+        geometry=calibration.geometry,
+        cm_per_pixel=calibration.cm_per_pixel,
+        homography=calibration.homography,
+        person=PersonEndpoints(
+            box=(10, 10, 50, 80),
+            top_of_head=(35.0, 10.0),
+            bottom_of_feet=(35.0, 89.0),
+            score=1.2,
+        ),
+    )
+    write_calibration_overlay(image_path, calibration, with_person_path)
+
+    without_person = cv2.imread(str(without_person_path))
+    with_person = cv2.imread(str(with_person_path))
+    assert without_person is not None
+    assert with_person is not None
+    assert np.any(without_person != with_person)
 
 
 def test_rejects_missing_overlay_input(tmp_path):

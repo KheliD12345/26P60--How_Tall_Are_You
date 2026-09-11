@@ -40,6 +40,42 @@ def write_calibration_overlay(
         end = (round(second.center_x), round(second.center_y))
         cv2.line(overlay, start, end, (255, 180, 0), 1)
 
+    if calibration.person is not None:
+        person = calibration.person
+        x, y, width, height = person.box
+        head = tuple(round(value) for value in person.top_of_head)
+        feet = tuple(round(value) for value in person.bottom_of_feet)
+        cv2.rectangle(
+            overlay,
+            (x, y),
+            (x + width - 1, y + height - 1),
+            (0, 165, 255),
+            3,
+        )
+        cv2.line(overlay, head, feet, (255, 0, 255), 2)
+        cv2.circle(overlay, head, 7, (0, 0, 255), -1)
+        cv2.circle(overlay, feet, 7, (255, 0, 0), -1)
+        cv2.putText(
+            overlay,
+            "head",
+            (head[0] + 10, head[1]),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            overlay,
+            "feet",
+            (feet[0] + 10, feet[1]),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 0, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
     cv2.putText(
         overlay,
         f"scale: {calibration.cm_per_pixel:.6f} cm/pixel",
