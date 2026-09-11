@@ -66,6 +66,24 @@ class HomographyResult:
 
 
 @dataclass(frozen=True)
+class PersonEndpoints:
+    box: tuple[int, int, int, int]
+    top_of_head: tuple[float, float]
+    bottom_of_feet: tuple[float, float]
+    score: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "box": list(self.box),
+            "top_of_head": [round(value, 2) for value in self.top_of_head],
+            "bottom_of_feet": [
+                round(value, 2) for value in self.bottom_of_feet
+            ],
+            "score": round(self.score, 2),
+        }
+
+
+@dataclass(frozen=True)
 class CalibrationResult:
     markers: tuple[DetectedMarker, ...]
     geometry: tuple[MarkerPairGeometry, ...]

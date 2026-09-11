@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from height_estimation.models import DetectedMarker, MarkerLayout
+from height_estimation.models import DetectedMarker, MarkerLayout, PersonEndpoints
 
 
 LAYOUT_PATH = Path(__file__).parents[1] / "configs" / "marker_layout.json"
@@ -41,3 +41,19 @@ def test_serializes_detected_marker():
 
     assert marker.to_dict()["center"] == [4.0, 5.0]
     assert marker.to_dict()["corners"][0] == [1.12, 2.46]
+
+
+def test_serializes_person_endpoints():
+    person = PersonEndpoints(
+        box=(10, 20, 80, 180),
+        top_of_head=(50.125, 22.456),
+        bottom_of_feet=(50.875, 199.987),
+        score=1.2345,
+    )
+
+    assert person.to_dict() == {
+        "box": [10, 20, 80, 180],
+        "top_of_head": [50.12, 22.46],
+        "bottom_of_feet": [50.88, 199.99],
+        "score": 1.23,
+    }
