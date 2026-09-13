@@ -44,6 +44,25 @@ def test_no_person_returns_none(tmp_path, monkeypatch):
     assert detect_person_endpoints(image_path) is None
 
 
+def test_out_of_image_person_returns_none(tmp_path, monkeypatch):
+    image_path = tmp_path / "outside.png"
+    cv2.imwrite(str(image_path), np.zeros((200, 200, 3), dtype=np.uint8))
+
+    class OutsideDetector:
+        def setSVMDetector(self, detector):
+            pass
+
+        def detectMultiScale(self, image, **kwargs):
+            return np.array([[250, 250, 100, 100]]), np.array([1.5])
+
+    monkeypatch.setattr(
+        "height_estimation.person.cv2.HOGDescriptor",
+        OutsideDetector,
+    )
+
+    assert detect_person_endpoints(image_path) is None
+
+
 def test_endpoints_are_ordered_and_inside_image_bounds(tmp_path, monkeypatch):
     image_path = tmp_path / "person.png"
     cv2.imwrite(str(image_path), np.zeros((200, 160, 3), dtype=np.uint8))
