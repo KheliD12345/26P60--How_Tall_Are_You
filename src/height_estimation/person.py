@@ -95,8 +95,16 @@ def detect_person_endpoints(
         return None
 
     x, y, width, height, score = candidate
-    x, y, width, height = refine_person_box(image, candidate)
     image_height, image_width = image.shape[:2]
+    if (
+        x + width <= 0
+        or y + height <= 0
+        or x >= image_width
+        or y >= image_height
+    ):
+        return None
+
+    x, y, width, height = refine_person_box(image, candidate)
     left = max(0, min(x, image_width - 1))
     top = max(0, min(y, image_height - 1))
     right = max(left, min(x + width - 1, image_width - 1))
