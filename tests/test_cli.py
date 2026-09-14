@@ -139,6 +139,8 @@ def test_cli_writes_person_endpoints(tmp_path, monkeypatch, capsys):
     result = json.loads(output_path.read_text(encoding="utf-8"))
     assert result["person"]["top_of_head"] == [50.0, 20.0]
     assert result["person"]["bottom_of_feet"] == [50.0, 199.0]
+    assert result["person"]["height_px"] == 179.0
+    assert result["person"]["height_cm"] == 17.9
 
 
 def test_cli_writes_requested_overlay(tmp_path, monkeypatch, capsys):

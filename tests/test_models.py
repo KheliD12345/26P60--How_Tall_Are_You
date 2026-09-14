@@ -59,6 +59,7 @@ def test_serializes_person_endpoints():
         "box": [10, 20, 80, 180],
         "top_of_head": [50.12, 22.46],
         "bottom_of_feet": [50.88, 199.99],
+        "height_px": 177.53,
         "score": 1.23,
     }
 
