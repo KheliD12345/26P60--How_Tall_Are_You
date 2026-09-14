@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from height_estimation.height import calculate_height_cm
 from height_estimation.models import (
     CalibrationResult,
     DetectedMarker,
@@ -64,6 +65,10 @@ def test_serializes_person_endpoints():
         "height_px": 177.53,
         "score": 1.23,
     }
+
+
+def test_calculates_height_from_pixel_height():
+    assert calculate_height_cm(179.0, 0.1) == pytest.approx(17.9)
 
 
 def test_baseline_height_stays_separate_from_homography():
