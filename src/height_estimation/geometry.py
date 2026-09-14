@@ -9,6 +9,7 @@ from .models import (
     HomographyResult,
     MarkerLayout,
     MarkerPairGeometry,
+    PersonEndpoints,
 )
 
 
@@ -113,3 +114,13 @@ def transform_point(
     homography = np.array(matrix, dtype=np.float32)
     transformed = cv2.perspectiveTransform(source, homography)[0, 0]
     return float(transformed[0]), float(transformed[1])
+
+
+def transform_person_endpoints(
+    person: PersonEndpoints,
+    matrix: tuple[tuple[float, float, float], ...],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    return (
+        transform_point(person.top_of_head, matrix),
+        transform_point(person.bottom_of_feet, matrix),
+    )
