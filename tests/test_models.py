@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from height_estimation.models import (
+    CalibrationResult,
     DetectedMarker,
+    HomographyResult,
     MarkerLayout,
     PersonEndpoints,
 )
@@ -62,6 +64,30 @@ def test_serializes_person_endpoints():
         "height_px": 177.53,
         "score": 1.23,
     }
+
+
+def test_baseline_height_stays_separate_from_homography():
+    person = PersonEndpoints(
+        box=(10, 20, 80, 180),
+        top_of_head=(50.0, 20.0),
+        bottom_of_feet=(50.0, 199.0),
+        score=1.0,
+    )
+    calibration = CalibrationResult(
+        markers=(),
+        geometry=(),
+        cm_per_pixel=0.1,
+        homography=HomographyResult(
+            matrix=((1.0, 0.0, 25.0), (0.0, 1.5, -10.0), (0.001, 0.0, 1.0)),
+            reprojection_error_cm=0.0,
+        ),
+        person=person,
+    )
+
+    result = calibration.to_dict()
+
+    assert result["person"]["height_px"] == 179.0
+    assert result["person"]["height_cm"] == 17.9
 
 
 @pytest.mark.parametrize(
