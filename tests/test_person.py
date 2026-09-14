@@ -63,6 +63,33 @@ def test_out_of_image_person_returns_none(tmp_path, monkeypatch):
     assert detect_person_endpoints(image_path) is None
 
 
+def test_grabcut_failure_is_reported_as_value_error(tmp_path, monkeypatch):
+    image_path = tmp_path / "broken-person.png"
+    cv2.imwrite(str(image_path), np.zeros((200, 160, 3), dtype=np.uint8))
+
+    class CandidateDetector:
+        def setSVMDetector(self, detector):
+            pass
+
+        def detectMultiScale(self, image, **kwargs):
+            return np.array([[10, 10, 100, 180]]), np.array([1.5])
+
+    def broken_grabcut(*args, **kwargs):
+        raise cv2.error("grabCut failed")
+
+    monkeypatch.setattr(
+        "height_estimation.person.cv2.HOGDescriptor",
+        CandidateDetector,
+    )
+    monkeypatch.setattr(
+        "height_estimation.person.cv2.grabCut",
+        broken_grabcut,
+    )
+
+    with pytest.raises(ValueError, match="could not refine person detection"):
+        detect_person_endpoints(image_path)
+
+
 def test_endpoints_are_ordered_and_inside_image_bounds(tmp_path, monkeypatch):
     image_path = tmp_path / "person.png"
     cv2.imwrite(str(image_path), np.zeros((200, 160, 3), dtype=np.uint8))

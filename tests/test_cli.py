@@ -184,3 +184,20 @@ def test_cli_rejects_missing_markers(tmp_path, monkeypatch, capsys):
 
     assert error.value.code == 2
     assert "missing required ArUco markers" in capsys.readouterr().err
+
+
+def test_cli_rejects_person_detection_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        "height_estimation.cli.calibrate_image",
+        lambda image, layout: (_ for _ in ()).throw(
+            ValueError("could not refine person detection: grabCut failed")
+        ),
+    )
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"image")
+
+    with pytest.raises(SystemExit) as error:
+        main([str(image_path)])
+
+    assert error.value.code == 2
+    assert "could not refine person detection" in capsys.readouterr().err
