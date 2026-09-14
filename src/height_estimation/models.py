@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import json
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,27 @@ class PersonEndpoints:
     top_of_head: tuple[float, float]
     bottom_of_feet: tuple[float, float]
     score: float
+
+    def __post_init__(self) -> None:
+        x, y, width, height = self.box
+        if x < 0 or y < 0 or width <= 0 or height <= 0:
+            raise ValueError(
+                "person box must have a non-negative position and "
+                "positive dimensions"
+            )
+
+        if not all(
+            isfinite(value)
+            for point in (self.top_of_head, self.bottom_of_feet)
+            for value in point
+        ):
+            raise ValueError("person endpoints must have finite coordinates")
+
+        if not isfinite(self.score):
+            raise ValueError("person score must be finite")
+
+        if self.top_of_head[1] >= self.bottom_of_feet[1]:
+            raise ValueError("top of head must be above bottom of feet")
 
     def to_dict(self) -> dict[str, Any]:
         return {
