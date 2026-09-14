@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from height_estimation.models import DetectedMarker, MarkerLayout
+from height_estimation.models import (
+    DetectedMarker,
+    MarkerLayout,
+    PersonEndpoints,
+)
 
 
 LAYOUT_PATH = Path(__file__).parents[1] / "configs" / "marker_layout.json"
@@ -41,3 +45,62 @@ def test_serializes_detected_marker():
 
     assert marker.to_dict()["center"] == [4.0, 5.0]
     assert marker.to_dict()["corners"][0] == [1.12, 2.46]
+
+
+def test_serializes_person_endpoints():
+    person = PersonEndpoints(
+        box=(10, 20, 80, 180),
+        top_of_head=(50.125, 22.456),
+        bottom_of_feet=(50.875, 199.987),
+        score=1.2345,
+    )
+
+    assert person.to_dict() == {
+        "box": [10, 20, 80, 180],
+        "top_of_head": [50.12, 22.46],
+        "bottom_of_feet": [50.88, 199.99],
+        "height_px": 177.53,
+        "score": 1.23,
+    }
+
+
+@pytest.mark.parametrize(
+    "box",
+    [(-1, 20, 80, 180), (10, 20, 0, 180), (10, 20, 80, 0)],
+)
+def test_rejects_invalid_person_boxes(box):
+    with pytest.raises(ValueError, match="person box"):
+        PersonEndpoints(
+            box=box,
+            top_of_head=(50.0, 20.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=1.0,
+        )
+
+
+def test_rejects_non_finite_person_values():
+    with pytest.raises(ValueError, match="finite coordinates"):
+        PersonEndpoints(
+            box=(10, 20, 80, 180),
+            top_of_head=(float("nan"), 20.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=1.0,
+        )
+
+    with pytest.raises(ValueError, match="finite"):
+        PersonEndpoints(
+            box=(10, 20, 80, 180),
+            top_of_head=(50.0, 20.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=float("inf"),
+        )
+
+
+def test_rejects_reversed_person_endpoints():
+    with pytest.raises(ValueError, match="above"):
+        PersonEndpoints(
+            box=(10, 20, 80, 180),
+            top_of_head=(50.0, 200.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=1.0,
+        )

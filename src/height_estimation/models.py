@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import json
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,9 @@ class DetectedMarker:
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
-            "corners": [[round(x, 2), round(y, 2)] for x, y in self.corners],
+            "corners": [
+                [round(x, 2), round(y, 2)] for x, y in self.corners
+            ],
             "center": [round(self.center_x, 2), round(self.center_y, 2)],
             "area_px": round(self.area_px, 2),
         }
@@ -42,7 +45,9 @@ class MarkerPairGeometry:
         return {
             "first_id": self.first_id,
             "second_id": self.second_id,
-            "pixel_delta": [round(value, 2) for value in self.pixel_delta],
+            "pixel_delta": [
+                round(value, 2) for value in self.pixel_delta
+            ],
             "physical_delta_cm": [
                 round(value, 2) for value in self.physical_delta_cm
             ],
@@ -59,10 +64,53 @@ class HomographyResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "matrix": [
-                [round(value, 8) for value in row]
-                for row in self.matrix
+                [round(value, 8) for value in row] for row in self.matrix
             ],
             "reprojection_error_cm": round(self.reprojection_error_cm, 6),
+        }
+
+
+@dataclass(frozen=True)
+class PersonEndpoints:
+    box: tuple[int, int, int, int]
+    top_of_head: tuple[float, float]
+    bottom_of_feet: tuple[float, float]
+    score: float
+
+    def __post_init__(self) -> None:
+        x, y, width, height = self.box
+        if x < 0 or y < 0 or width <= 0 or height <= 0:
+            raise ValueError(
+                "person box must have a non-negative position and "
+                "positive dimensions"
+            )
+
+        if not all(
+            isfinite(value)
+            for point in (self.top_of_head, self.bottom_of_feet)
+            for value in point
+        ):
+            raise ValueError("person endpoints must have finite coordinates")
+
+        if not isfinite(self.score):
+            raise ValueError("person score must be finite")
+
+        if self.top_of_head[1] >= self.bottom_of_feet[1]:
+            raise ValueError("top of head must be above bottom of feet")
+
+    @property
+    def height_px(self) -> float:
+        return self.bottom_of_feet[1] - self.top_of_head[1]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "box": list(self.box),
+            "top_of_head": [round(value, 2) for value in self.top_of_head],
+            "bottom_of_feet": [
+                round(value, 2) for value in self.bottom_of_feet
+            ],
+            "height_px": round(self.height_px, 2),
+            "score": round(self.score, 2),
         }
 
 
@@ -72,8 +120,16 @@ class CalibrationResult:
     geometry: tuple[MarkerPairGeometry, ...]
     cm_per_pixel: float
     homography: HomographyResult
+    person: PersonEndpoints | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        person = None
+        if self.person is not None:
+            person = self.person.to_dict()
+            person["height_cm"] = round(
+                self.person.height_px * self.cm_per_pixel, 2
+            )
+
         return {
             "markers": [marker.to_dict() for marker in self.markers],
             "geometry": [pair.to_dict() for pair in self.geometry],
@@ -82,6 +138,7 @@ class CalibrationResult:
                 "pixels_per_cm": round(1 / self.cm_per_pixel, 2),
             },
             "homography": self.homography.to_dict(),
+            "person": person,
         }
 
 

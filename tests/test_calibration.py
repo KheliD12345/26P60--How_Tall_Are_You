@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from height_estimation.calibration import calibrate_image
-from height_estimation.models import MarkerLayout
+from height_estimation.models import MarkerLayout, PersonEndpoints
 
 
 def make_layout() -> MarkerLayout:
@@ -42,3 +42,25 @@ def test_calibrates_image_in_one_result(tmp_path):
     assert result.cm_per_pixel == 0.2
     assert result.homography.reprojection_error_cm < 0.0001
     assert result.to_dict()["scale"]["pixels_per_cm"] == 5.0
+    assert result.person is None
+
+
+def test_calibrates_person_height(tmp_path, monkeypatch):
+    image_path = tmp_path / "markers.png"
+    make_image(image_path)
+    person = PersonEndpoints(
+        box=(200, 100, 100, 300),
+        top_of_head=(250.0, 100.0),
+        bottom_of_feet=(250.0, 300.0),
+        score=1.5,
+    )
+    monkeypatch.setattr(
+        "height_estimation.calibration.detect_person_endpoints",
+        lambda image: person,
+    )
+
+    result = calibrate_image(image_path, make_layout())
+
+    assert result.person is person
+    assert result.to_dict()["person"]["height_px"] == 200.0
+    assert result.to_dict()["person"]["height_cm"] == 40.0

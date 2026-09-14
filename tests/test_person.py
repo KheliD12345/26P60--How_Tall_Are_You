@@ -1,0 +1,130 @@
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from height_estimation.person import detect_person_endpoints, select_person_candidate
+
+
+SAMPLE_IMAGES = [
+    Path(__file__).parents[1] / "test-khelan.jpg",
+    Path(__file__).parents[1] / "test-shriya.jpg",
+]
+
+
+def test_selects_largest_useful_full_body_candidate():
+    candidates = [
+        (20, 30, 30, 50, 2.0),
+        (100, 40, 120, 300, 1.2),
+    ]
+
+    assert select_person_candidate(candidates) == (100, 40, 120, 300, 1.2)
+
+
+def test_returns_none_when_no_useful_candidate_exists():
+    candidates = [(20, 30, 30, 50, 2.0)]
+
+    assert select_person_candidate(candidates) is None
+
+
+def test_no_person_returns_none(tmp_path, monkeypatch):
+    image_path = tmp_path / "empty.png"
+    cv2.imwrite(str(image_path), np.zeros((200, 200, 3), dtype=np.uint8))
+
+    class EmptyDetector:
+        def setSVMDetector(self, detector):
+            pass
+
+        def detectMultiScale(self, image, **kwargs):
+            return (), ()
+
+    monkeypatch.setattr("height_estimation.person.cv2.HOGDescriptor", EmptyDetector)
+
+    assert detect_person_endpoints(image_path) is None
+
+
+def test_out_of_image_person_returns_none(tmp_path, monkeypatch):
+    image_path = tmp_path / "outside.png"
+    cv2.imwrite(str(image_path), np.zeros((200, 200, 3), dtype=np.uint8))
+
+    class OutsideDetector:
+        def setSVMDetector(self, detector):
+            pass
+
+        def detectMultiScale(self, image, **kwargs):
+            return np.array([[250, 250, 100, 100]]), np.array([1.5])
+
+    monkeypatch.setattr(
+        "height_estimation.person.cv2.HOGDescriptor",
+        OutsideDetector,
+    )
+
+    assert detect_person_endpoints(image_path) is None
+
+
+def test_grabcut_failure_is_reported_as_value_error(tmp_path, monkeypatch):
+    image_path = tmp_path / "broken-person.png"
+    cv2.imwrite(str(image_path), np.zeros((200, 160, 3), dtype=np.uint8))
+
+    class CandidateDetector:
+        def setSVMDetector(self, detector):
+            pass
+
+        def detectMultiScale(self, image, **kwargs):
+            return np.array([[10, 10, 100, 180]]), np.array([1.5])
+
+    def broken_grabcut(*args, **kwargs):
+        raise cv2.error("grabCut failed")
+
+    monkeypatch.setattr(
+        "height_estimation.person.cv2.HOGDescriptor",
+        CandidateDetector,
+    )
+    monkeypatch.setattr(
+        "height_estimation.person.cv2.grabCut",
+        broken_grabcut,
+    )
+
+    with pytest.raises(ValueError, match="could not refine person detection"):
+        detect_person_endpoints(image_path)
+
+
+def test_endpoints_are_ordered_and_inside_image_bounds(tmp_path, monkeypatch):
+    image_path = tmp_path / "person.png"
+    cv2.imwrite(str(image_path), np.zeros((200, 160, 3), dtype=np.uint8))
+
+    class CandidateDetector:
+        def setSVMDetector(self, detector):
+            pass
+
+        def detectMultiScale(self, image, **kwargs):
+            return np.array([[-20, -10, 100, 250]]), np.array([1.5])
+
+    monkeypatch.setattr(
+        "height_estimation.person.cv2.HOGDescriptor",
+        CandidateDetector,
+    )
+
+    result = detect_person_endpoints(image_path)
+
+    assert result is not None
+    assert result.top_of_head[1] < result.bottom_of_feet[1]
+    assert 0 <= result.top_of_head[0] < 160
+    assert 0 <= result.top_of_head[1] < 200
+    assert 0 <= result.bottom_of_feet[0] < 160
+    assert 0 <= result.bottom_of_feet[1] < 200
+
+
+@pytest.mark.parametrize("image_path", SAMPLE_IMAGES)
+def test_detects_person_endpoints_in_sample_image(image_path):
+    image = cv2.imread(str(image_path))
+    result = detect_person_endpoints(image_path)
+
+    assert image is not None
+    assert result is not None
+    assert result.top_of_head[1] < result.bottom_of_feet[1]
+    image_height, image_width = image.shape[:2]
+    for point in (result.top_of_head, result.bottom_of_feet):
+        assert 0 <= point[0] < image_width
+        assert 0 <= point[1] < image_height
