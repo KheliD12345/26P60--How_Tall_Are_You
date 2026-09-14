@@ -98,6 +98,10 @@ class PersonEndpoints:
         if self.top_of_head[1] >= self.bottom_of_feet[1]:
             raise ValueError("top of head must be above bottom of feet")
 
+    @property
+    def height_px(self) -> float:
+        return self.bottom_of_feet[1] - self.top_of_head[1]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "box": list(self.box),
@@ -105,6 +109,7 @@ class PersonEndpoints:
             "bottom_of_feet": [
                 round(value, 2) for value in self.bottom_of_feet
             ],
+            "height_px": round(self.height_px, 2),
             "score": round(self.score, 2),
         }
 
@@ -118,6 +123,13 @@ class CalibrationResult:
     person: PersonEndpoints | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        person = None
+        if self.person is not None:
+            person = self.person.to_dict()
+            person["height_cm"] = round(
+                self.person.height_px * self.cm_per_pixel, 2
+            )
+
         return {
             "markers": [marker.to_dict() for marker in self.markers],
             "geometry": [pair.to_dict() for pair in self.geometry],
@@ -126,7 +138,7 @@ class CalibrationResult:
                 "pixels_per_cm": round(1 / self.cm_per_pixel, 2),
             },
             "homography": self.homography.to_dict(),
-            "person": self.person.to_dict() if self.person else None,
+            "person": person,
         }
 
 
