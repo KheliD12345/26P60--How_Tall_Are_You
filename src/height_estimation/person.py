@@ -40,8 +40,18 @@ def refine_person_box(
     inner_top = max(1, crop_height // 20)
     inner_bottom = min(crop_height - 1, crop_height * 19 // 20)
     mask[inner_top:inner_bottom, inner_left:inner_right] = cv2.GC_PR_FGD
-    cv2.grabCut(crop, mask, None, np.zeros((1, 65), np.float64),
-                np.zeros((1, 65), np.float64), 5, cv2.GC_INIT_WITH_MASK)
+    try:
+        cv2.grabCut(
+            crop,
+            mask,
+            None,
+            np.zeros((1, 65), np.float64),
+            np.zeros((1, 65), np.float64),
+            5,
+            cv2.GC_INIT_WITH_MASK,
+        )
+    except cv2.error as error:
+        raise ValueError(f"could not refine person detection: {error}") from error
 
     foreground = np.uint8(
         (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD)
