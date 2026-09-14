@@ -61,3 +61,45 @@ def test_serializes_person_endpoints():
         "bottom_of_feet": [50.88, 199.99],
         "score": 1.23,
     }
+
+
+@pytest.mark.parametrize(
+    "box",
+    [(-1, 20, 80, 180), (10, 20, 0, 180), (10, 20, 80, 0)],
+)
+def test_rejects_invalid_person_boxes(box):
+    with pytest.raises(ValueError, match="person box"):
+        PersonEndpoints(
+            box=box,
+            top_of_head=(50.0, 20.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=1.0,
+        )
+
+
+def test_rejects_non_finite_person_values():
+    with pytest.raises(ValueError, match="finite coordinates"):
+        PersonEndpoints(
+            box=(10, 20, 80, 180),
+            top_of_head=(float("nan"), 20.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=1.0,
+        )
+
+    with pytest.raises(ValueError, match="finite"):
+        PersonEndpoints(
+            box=(10, 20, 80, 180),
+            top_of_head=(50.0, 20.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=float("inf"),
+        )
+
+
+def test_rejects_reversed_person_endpoints():
+    with pytest.raises(ValueError, match="above"):
+        PersonEndpoints(
+            box=(10, 20, 80, 180),
+            top_of_head=(50.0, 200.0),
+            bottom_of_feet=(50.0, 199.0),
+            score=1.0,
+        )
