@@ -123,6 +123,7 @@ class CalibrationResult:
     cm_per_pixel: float
     homography: HomographyResult
     person: PersonEndpoints | None = None
+    perspective_height_cm: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         person = None
@@ -132,6 +133,11 @@ class CalibrationResult:
                 calculate_height_cm(self.person.height_px, self.cm_per_pixel),
                 2,
             )
+            if self.perspective_height_cm is not None:
+                person["perspective_height_cm"] = round(
+                    self.perspective_height_cm,
+                    2,
+                )
 
         return {
             "markers": [marker.to_dict() for marker in self.markers],

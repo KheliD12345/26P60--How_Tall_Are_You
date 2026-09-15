@@ -123,6 +123,7 @@ def test_cli_writes_person_endpoints(tmp_path, monkeypatch, capsys):
             bottom_of_feet=(50.0, 199.0),
             score=1.23,
         ),
+        perspective_height_cm=18.5,
     )
     monkeypatch.setattr(
         "height_estimation.cli.calibrate_image",
@@ -141,6 +142,7 @@ def test_cli_writes_person_endpoints(tmp_path, monkeypatch, capsys):
     assert result["person"]["bottom_of_feet"] == [50.0, 199.0]
     assert result["person"]["height_px"] == 179.0
     assert result["person"]["height_cm"] == 17.9
+    assert result["person"]["perspective_height_cm"] == 18.5
 
 
 def test_cli_writes_requested_overlay(tmp_path, monkeypatch, capsys):

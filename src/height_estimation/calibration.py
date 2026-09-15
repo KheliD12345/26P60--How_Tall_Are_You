@@ -5,6 +5,11 @@ from .geometry import (
     calculate_pairwise_geometry,
     estimate_cm_per_pixel,
     estimate_homography,
+    transform_person_endpoints,
+)
+from .height import (
+    calculate_perspective_height_cm,
+    validate_perspective_result,
 )
 from .models import CalibrationResult, MarkerLayout
 from .person import detect_person_endpoints
@@ -20,10 +25,24 @@ def calibrate_image(
     cm_per_pixel = estimate_cm_per_pixel(geometry)
     homography = estimate_homography(markers, layout)
     person = detect_person_endpoints(image_path)
+    perspective_height_cm = None
+    if person is not None:
+        head, feet = transform_person_endpoints(person, homography.matrix)
+        try:
+            validate_perspective_result(
+                head,
+                feet,
+                homography.reprojection_error_cm,
+            )
+            perspective_height_cm = calculate_perspective_height_cm(head, feet)
+        except ValueError:
+            perspective_height_cm = None
+
     return CalibrationResult(
         markers=markers,
         geometry=geometry,
         cm_per_pixel=cm_per_pixel,
         homography=homography,
         person=person,
+        perspective_height_cm=perspective_height_cm,
     )
