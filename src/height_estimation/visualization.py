@@ -96,6 +96,17 @@ def write_calibration_overlay(
         2,
         cv2.LINE_AA,
     )
+    if calibration.perspective_height_cm is not None:
+        cv2.putText(
+            overlay,
+            f"perspective height: {calibration.perspective_height_cm:.2f} cm",
+            (20, 110),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (0, 0, 0),
+            2,
+            cv2.LINE_AA,
+        )
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
