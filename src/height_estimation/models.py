@@ -4,6 +4,8 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
+from .height import calculate_height_cm
+
 
 @dataclass(frozen=True)
 class MarkerPosition:
@@ -121,14 +123,21 @@ class CalibrationResult:
     cm_per_pixel: float
     homography: HomographyResult
     person: PersonEndpoints | None = None
+    perspective_height_cm: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         person = None
         if self.person is not None:
             person = self.person.to_dict()
             person["height_cm"] = round(
-                self.person.height_px * self.cm_per_pixel, 2
+                calculate_height_cm(self.person.height_px, self.cm_per_pixel),
+                2,
             )
+            if self.perspective_height_cm is not None:
+                person["perspective_height_cm"] = round(
+                    self.perspective_height_cm,
+                    2,
+                )
 
         return {
             "markers": [marker.to_dict() for marker in self.markers],

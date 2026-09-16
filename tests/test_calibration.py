@@ -64,3 +64,29 @@ def test_calibrates_person_height(tmp_path, monkeypatch):
     assert result.person is person
     assert result.to_dict()["person"]["height_px"] == 200.0
     assert result.to_dict()["person"]["height_cm"] == 40.0
+    assert result.to_dict()["person"]["perspective_height_cm"] == 40.0
+
+
+def test_skips_perspective_height_when_validation_fails(tmp_path, monkeypatch):
+    image_path = tmp_path / "markers.png"
+    make_image(image_path)
+    person = PersonEndpoints(
+        box=(200, 100, 100, 300),
+        top_of_head=(250.0, 100.0),
+        bottom_of_feet=(250.0, 300.0),
+        score=1.5,
+    )
+    monkeypatch.setattr(
+        "height_estimation.calibration.detect_person_endpoints",
+        lambda image: person,
+    )
+    monkeypatch.setattr(
+        "height_estimation.calibration.validate_perspective_result",
+        lambda *args: (_ for _ in ()).throw(ValueError("not reliable")),
+    )
+
+    result = calibrate_image(image_path, make_layout())
+
+    assert result.person is person
+    assert result.perspective_height_cm is None
+    assert "perspective_height_cm" not in result.to_dict()["person"]

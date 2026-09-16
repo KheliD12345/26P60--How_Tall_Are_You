@@ -98,6 +98,31 @@ def test_adds_person_endpoint_annotations(tmp_path):
     assert np.any(without_person != with_person)
 
 
+def test_adds_perspective_height_annotation(tmp_path):
+    image_path = tmp_path / "image.png"
+    baseline_path = tmp_path / "baseline.png"
+    perspective_path = tmp_path / "perspective.png"
+    image = np.full((150, 250, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+
+    write_calibration_overlay(image_path, make_calibration(), baseline_path)
+    calibration = make_calibration()
+    perspective = CalibrationResult(
+        markers=calibration.markers,
+        geometry=calibration.geometry,
+        cm_per_pixel=calibration.cm_per_pixel,
+        homography=calibration.homography,
+        perspective_height_cm=18.5,
+    )
+    write_calibration_overlay(image_path, perspective, perspective_path)
+
+    baseline = cv2.imread(str(baseline_path))
+    with_perspective = cv2.imread(str(perspective_path))
+    assert baseline is not None
+    assert with_perspective is not None
+    assert np.any(baseline != with_perspective)
+
+
 def test_rejects_missing_overlay_input(tmp_path):
     with np.testing.assert_raises(ValueError):
         write_calibration_overlay(

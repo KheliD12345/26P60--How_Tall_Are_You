@@ -1,10 +1,12 @@
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 
 PROJECT_ROOT = Path(__file__).parents[1]
@@ -83,3 +85,32 @@ def test_module_command_reports_missing_markers(tmp_path):
 
     assert completed.returncode != 0
     assert "missing required ArUco markers" in completed.stderr
+
+
+@pytest.mark.parametrize("image_name", ["test-khelan.jpg", "test-shriya.jpg"])
+def test_sample_image_writes_perspective_height(tmp_path, image_name):
+    image_path = PROJECT_ROOT / image_name
+    layout_path = PROJECT_ROOT / "configs" / "marker_layout.json"
+    result_path = tmp_path / f"{image_path.stem}.json"
+    overlay_path = tmp_path / f"{image_path.stem}.png"
+
+    completed = run_cli(
+        str(image_path),
+        "--layout",
+        str(layout_path),
+        "--output",
+        str(result_path),
+        "--overlay",
+        str(overlay_path),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    person = result["person"]
+    assert [marker["id"] for marker in result["markers"]] == [0, 1, 2, 3]
+    assert len(result["geometry"]) == 6
+    assert person is not None
+    assert math.isfinite(person["height_cm"])
+    assert math.isfinite(person["perspective_height_cm"])
+    assert person["perspective_height_cm"] > 0
+    assert overlay_path.exists()
