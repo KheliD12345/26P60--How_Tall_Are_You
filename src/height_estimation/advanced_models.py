@@ -17,38 +17,121 @@ class Landmark:
     y: float
     visibility: float = 1.0
     normalized: bool = True
+    coordinate_system: str | None = None
 
     def __post_init__(self) -> None:
-        if not all(isfinite(value) for value in (self.x, self.y, self.visibility)):
+        try:
+            coordinates = (float(self.x), float(self.y))
+            visibility = float(self.visibility)
+        except (TypeError, ValueError) as error:
+            raise ValueError("landmark values must be numeric") from error
+
+        coordinate_system = self.coordinate_system
+        if coordinate_system is None:
+            coordinate_system = "normalized" if self.normalized else "pixel"
+        if coordinate_system not in {"normalized", "pixel"}:
+            raise ValueError(
+                "landmark coordinate_system must be normalized or pixel"
+            )
+
+        if not all(isfinite(value) for value in (*coordinates, visibility)):
             raise ValueError("landmark values must be finite")
-        if not 0.0 <= self.visibility <= 1.0:
+        if not 0.0 <= visibility <= 1.0:
             raise ValueError("landmark visibility must be between zero and one")
+
+        object.__setattr__(self, "x", coordinates[0])
+        object.__setattr__(self, "y", coordinates[1])
+        object.__setattr__(self, "visibility", visibility)
+        object.__setattr__(self, "coordinate_system", coordinate_system)
+        object.__setattr__(
+            self,
+            "normalized",
+            coordinate_system == "normalized",
+        )
+
+    @property
+    def confidence(self) -> float:
+        return self.visibility
 
     @classmethod
     def from_value(
         cls,
-        value: "Landmark | Mapping[str, Any] | tuple[float, ...] | list[float]",
+        value: object,
         *,
         normalized: bool = True,
+        coordinate_system: str | None = None,
     ) -> "Landmark":
         if isinstance(value, cls):
             return value
         if isinstance(value, Mapping):
-            visibility = value.get("visibility", value.get("score", 1.0))
-            return cls(
-                float(value["x"]),
-                float(value["y"]),
-                float(visibility),
-                normalized,
+            try:
+                x = value["x"]
+                y = value["y"]
+            except KeyError as error:
+                raise ValueError(
+                    "landmark values require x and y coordinates"
+                ) from error
+            visibility = value.get(
+                "visibility",
+                value.get("confidence", value.get("score", 1.0)),
             )
-        if len(value) < 2:
-            raise ValueError("landmark values require x and y coordinates")
-        visibility = float(value[2]) if len(value) >= 3 else 1.0
-        return cls(float(value[0]), float(value[1]), visibility, normalized)
+            source_normalized = bool(value.get("normalized", normalized))
+            source_system = value.get("coordinate_system", coordinate_system)
+            return cls(
+                float(x),
+                float(y),
+                float(visibility),
+                source_normalized,
+                source_system,
+            )
+        if isinstance(value, (tuple, list)):
+            if len(value) < 2:
+                raise ValueError("landmark values require x and y coordinates")
+            visibility = float(value[2]) if len(value) >= 3 else 1.0
+            return cls(
+                float(value[0]),
+                float(value[1]),
+                visibility,
+                normalized,
+                coordinate_system,
+            )
 
-    def to_pixel(self, image_width: int, image_height: int) -> tuple[float, float]:
-        if self.normalized:
-            return self.x * image_width, self.y * image_height
+        try:
+            x = getattr(value, "x")
+            y = getattr(value, "y")
+        except AttributeError as error:
+            raise ValueError(
+                "landmark values require x and y coordinates"
+            ) from error
+        visibility = getattr(
+            value,
+            "visibility",
+            getattr(value, "confidence", getattr(value, "score", 1.0)),
+        )
+        source_normalized = bool(getattr(value, "normalized", normalized))
+        source_system = getattr(value, "coordinate_system", coordinate_system)
+        return cls(
+            float(x),
+            float(y),
+            float(visibility),
+            source_normalized,
+            source_system,
+        )
+
+    def to_pixel(
+        self,
+        image_width: int | float,
+        image_height: int | float,
+    ) -> tuple[float, float]:
+        try:
+            width = float(image_width)
+            height = float(image_height)
+        except (TypeError, ValueError) as error:
+            raise ValueError("image dimensions must be finite and positive") from error
+        if not isfinite(width) or not isfinite(height) or width <= 0 or height <= 0:
+            raise ValueError("image dimensions must be finite and positive")
+        if self.coordinate_system == "normalized":
+            return self.x * width, self.y * height
         return self.x, self.y
 
 
