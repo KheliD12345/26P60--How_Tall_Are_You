@@ -10,6 +10,16 @@ from height_estimation.models import (
     MarkerLayout,
     PersonEndpoints,
 )
+from height_estimation.advanced_models import (
+    BodyDetections,
+    HeightEstimate,
+    Landmark,
+    MeasurementMethod,
+    MeasurementResult,
+    QualityAssessment,
+    QualityLevel,
+    QualityMetrics,
+)
 
 
 LAYOUT_PATH = Path(__file__).parents[1] / "configs" / "marker_layout.json"
@@ -135,3 +145,167 @@ def test_rejects_reversed_person_endpoints():
             bottom_of_feet=(50.0, 199.0),
             score=1.0,
         )
+
+
+def test_landmark_converts_supported_values_to_pixels():
+    class ExistingLandmark:
+        x = 0.25
+        y = 0.5
+        visibility = 0.8
+
+    mapped = Landmark.from_value(
+        {"x": 0.25, "y": 0.5, "confidence": 0.75}
+    )
+    tuple_value = Landmark.from_value((10.0, 20.0, 0.4), normalized=False)
+    existing = Landmark.from_value(ExistingLandmark())
+
+    assert mapped.visibility == 0.75
+    assert mapped.coordinate_system == "normalized"
+    assert mapped.to_pixel(200, 400) == (50.0, 200.0)
+    assert tuple_value.coordinate_system == "pixel"
+    assert tuple_value.to_pixel(200, 400) == (10.0, 20.0)
+    assert existing.visibility == 0.8
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"x": float("nan"), "y": 0.5},
+        {"x": 0.5, "y": 0.5, "visibility": 1.1},
+        (0.5,),
+    ],
+)
+def test_landmark_rejects_invalid_values(value):
+    with pytest.raises(ValueError):
+        Landmark.from_value(value)
+
+
+def test_body_detections_normalises_keypoints_and_falls_back_per_side():
+    detections = BodyDetections(
+        keypoints={
+            "left_heel": (10.0, 100.0, 0.9),
+            "right_ankle": {"x": 20.0, "y": 101.0, "visibility": 0.8},
+        },
+        head_top=(15.0, 5.0),
+        head_bottom=(15.0, 25.0),
+        head_confidence=0.95,
+    )
+
+    assert detections.head_top == Landmark(15.0, 5.0)
+    assert detections.head_bottom == Landmark(15.0, 25.0)
+    assert detections.head_confidence == 0.95
+    assert detections.heel_landmarks() == (
+        Landmark(10.0, 100.0, 0.9),
+        Landmark(20.0, 101.0, 0.8),
+    )
+    assert BodyDetections().heel_landmarks() == ()
+
+
+def test_quality_contracts_serialise_scores_and_recommendations():
+    metrics = QualityMetrics(
+        marker_visibility=1.0,
+        pose_severity=0.1,
+        blur_score=0.9,
+        occlusion_score=0.8,
+        model_agreement=0.7,
+    )
+    assessment = QualityAssessment(
+        passed=True,
+        metrics=metrics,
+        recommendations=("Retake with better lighting",),
+    )
+
+    assert metrics.overall_score() == pytest.approx(0.86)
+    assert metrics.level() == QualityLevel.HIGH
+    assert metrics.overall_quality() == QualityLevel.HIGH
+    assert assessment.to_dict() == {
+        "passed": True,
+        "metrics": {
+            "marker_visibility": 1.0,
+            "pose_severity": 0.1,
+            "blur_score": 0.9,
+            "occlusion_score": 0.8,
+            "model_agreement": 0.7,
+            "overall_score": 0.86,
+            "overall_quality": "high",
+        },
+        "recommendations": ["Retake with better lighting"],
+    }
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "marker_visibility",
+        "pose_severity",
+        "blur_score",
+        "occlusion_score",
+        "model_agreement",
+    ],
+)
+def test_quality_metrics_reject_out_of_range_values(field_name):
+    with pytest.raises(ValueError):
+        QualityMetrics(**{field_name: 1.1})
+
+
+def test_height_estimate_preserves_method_names_and_metadata():
+    estimate = HeightEstimate(
+        method=MeasurementMethod.GEOMETRIC,
+        height_cm=172.35,
+        confidence=0.875,
+        notes="Head to heel",
+        metadata={"scale_source": "aruco"},
+    )
+
+    assert estimate.to_dict() == {
+        "method": "geometric",
+        "height_cm": 172.35,
+        "confidence": 0.875,
+        "notes": "Head to heel",
+        "metadata": {"scale_source": "aruco"},
+    }
+
+
+def test_measurement_result_serialises_optional_estimates_and_diagnostics():
+    quality = QualityAssessment(
+        passed=True,
+        metrics=QualityMetrics(marker_visibility=0.75),
+    )
+    result = MeasurementResult(
+        estimated_height_cm=172.345,
+        uncertainty_range=(169.1, 175.6),
+        quality=quality,
+        method_estimates=(
+            HeightEstimate(
+                method=MeasurementMethod.GEOMETRIC,
+                height_cm=172.3,
+                confidence=0.8,
+            ),
+        ),
+        fusion_weights={"geometric": 1.0},
+        measurements={"head_to_heel_cm": 172.3},
+        diagnostics=("Only the geometric method was available",),
+        warnings=("Hair endpoint inferred",),
+    )
+
+    serialised = result.to_dict()
+
+    assert serialised["estimated_height_cm"] == 172.35
+    assert serialised["uncertainty_range"] == {
+        "lower_cm": 169.1,
+        "upper_cm": 175.6,
+        "total_range_cm": 6.5,
+    }
+    assert serialised["quality"]["metrics"]["overall_quality"] == "moderate"
+    assert serialised["method_estimates"][0]["method"] == "geometric"
+    assert serialised["fusion_weights"] == {"geometric": 1.0}
+    assert serialised["measurements"] == {"head_to_heel_cm": 172.3}
+    assert serialised["diagnostics"] == ["Only the geometric method was available"]
+    assert serialised["warnings"] == ["Hair endpoint inferred"]
+
+    minimal = MeasurementResult(
+        estimated_height_cm=170.0,
+        uncertainty_range=(170.0, 170.0),
+        quality=quality,
+    )
+    assert minimal.to_dict()["method_estimates"] == []
