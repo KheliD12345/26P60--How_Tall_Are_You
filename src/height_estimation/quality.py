@@ -68,25 +68,34 @@ class AcquisitionQualityGate:
         for side in ("left", "right"):
             names = (f"{side}_hip", f"{side}_knee", f"{side}_ankle")
             if all(name in keypoints for name in names):
-                hip = np.array(_point(keypoints[names[0]]))
-                knee = np.array(_point(keypoints[names[1]]))
-                ankle = np.array(_point(keypoints[names[2]]))
+                try:
+                    hip = np.array(_point(keypoints[names[0]]), dtype=float)
+                    knee = np.array(_point(keypoints[names[1]]), dtype=float)
+                    ankle = np.array(_point(keypoints[names[2]]), dtype=float)
+                except (TypeError, ValueError):
+                    continue
                 first = hip - knee
                 second = ankle - knee
                 denominator = np.linalg.norm(first) * np.linalg.norm(second)
-                if denominator > 0:
+                if denominator > 0 and np.isfinite(denominator):
                     angle = degrees(
                         np.arccos(np.clip(np.dot(first, second) / denominator, -1.0, 1.0))
                     )
-                    scores.append(float(np.clip((180.0 - angle) / 45.0, 0.0, 1.0)))
+                    if np.isfinite(angle):
+                        scores.append(float(np.clip((180.0 - angle) / 45.0, 0.0, 1.0)))
 
         if "head_top" in keypoints and "head_bottom" in keypoints:
-            top_x, top_y = _point(keypoints["head_top"])
-            bottom_x, bottom_y = _point(keypoints["head_bottom"])
-            tilt = degrees(
-                np.arctan2(abs(top_x - bottom_x), abs(top_y - bottom_y))
-            )
-            scores.append(float(np.clip(tilt / 30.0, 0.0, 1.0)))
+            try:
+                top_x, top_y = _point(keypoints["head_top"])
+                bottom_x, bottom_y = _point(keypoints["head_bottom"])
+                dx = abs(top_x - bottom_x)
+                dy = abs(top_y - bottom_y)
+                if dx or dy:
+                    tilt = degrees(np.arctan2(dx, dy))
+                    if np.isfinite(tilt):
+                        scores.append(float(np.clip(tilt / 30.0, 0.0, 1.0)))
+            except (TypeError, ValueError):
+                pass
 
         return float(np.mean(scores)) if scores else 0.5
 
