@@ -1,7 +1,12 @@
 import cv2
 import numpy as np
 
-from height_estimation.advanced_models import Landmark, QualityLevel
+from height_estimation.advanced_models import (
+    Landmark,
+    QualityAssessment,
+    QualityLevel,
+    QualityMetrics,
+)
 from height_estimation.quality import AcquisitionQualityGate
 
 
@@ -163,3 +168,70 @@ def test_quality_recommendations_are_stable_for_failed_criteria():
         "Required ArUco markers are not all visible",
         "Body landmarks are partially occluded",
     )
+
+
+def test_blur_score_rejects_invalid_images_and_thresholds_safely():
+    gate = AcquisitionQualityGate()
+
+    assert gate.blur_score(None) == 0.0
+    assert gate.blur_score(np.zeros((4, 4, 1), dtype=np.uint8)) == 0.0
+    assert gate.blur_score(np.zeros((4,), dtype=np.uint8)) == 0.0
+    assert gate.blur_score(np.zeros((4, 4), dtype=np.uint8), np.nan) == 0.0
+
+
+def test_degenerate_pose_evidence_remains_conservative():
+    keypoints = {
+        "left_hip": Landmark(0.5, 0.5),
+        "left_knee": Landmark(0.5, 0.5),
+        "left_ankle": Landmark(0.5, 0.5),
+        "head_top": Landmark(0.5, 0.5),
+        "head_bottom": Landmark(0.5, 0.5),
+    }
+
+    assert AcquisitionQualityGate.pose_severity(keypoints) == 0.5
+
+
+def test_quality_threshold_boundaries_are_inclusive():
+    gate = AcquisitionQualityGate(
+        min_blur_score=1.0,
+        min_marker_visibility=1.0,
+        max_pose_severity=0.0,
+        min_occlusion_score=1.0,
+    )
+    image = np.zeros((80, 80), dtype=np.uint8)
+    image[::2, :] = 255
+    keypoints = {
+        "head_top": Landmark(0.5, 0.1),
+        "head_bottom": Landmark(0.5, 0.2),
+    }
+
+    assessment = gate.evaluate(
+        image,
+        detected_markers=4,
+        keypoints=keypoints,
+        segmentation_mask=np.ones((10, 10), dtype=np.uint8),
+        body_bbox=(0, 0, 10, 10),
+    )
+
+    assert assessment.passed
+    assert assessment.recommendations == ()
+
+
+def test_quality_serialisation_preserves_contract_and_model_agreement():
+    assessment = QualityAssessment(
+        passed=True,
+        metrics=QualityMetrics(
+            marker_visibility=1.0,
+            pose_severity=0.0,
+            blur_score=1.0,
+            occlusion_score=1.0,
+            model_agreement=0.25,
+        ),
+    )
+
+    assert list(assessment.to_dict()) == [
+        "passed",
+        "metrics",
+        "recommendations",
+    ]
+    assert assessment.to_dict()["metrics"]["model_agreement"] == 0.25
