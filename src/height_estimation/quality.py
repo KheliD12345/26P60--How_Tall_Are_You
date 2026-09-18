@@ -187,5 +187,10 @@ class AcquisitionQualityGate:
             recommendations.append("Subject posture is too bent or tilted")
         if metrics.occlusion_score < self.min_occlusion_score:
             recommendations.append("Body landmarks are partially occluded")
-        passed = not recommendations
+        passed = (
+            metrics.blur_score >= self.min_blur_score
+            and metrics.marker_visibility >= self.min_marker_visibility
+            and metrics.pose_severity <= self.max_pose_severity
+            and metrics.occlusion_score >= self.min_occlusion_score
+        )
         return QualityAssessment(passed, metrics, tuple(recommendations))
