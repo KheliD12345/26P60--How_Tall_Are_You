@@ -33,8 +33,22 @@ class AcquisitionQualityGate:
 
     @staticmethod
     def blur_score(image: np.ndarray, sharpness_threshold: float = 100.0) -> float:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        if not isinstance(image, np.ndarray) or image.size == 0:
+            return 0.0
+        if not np.isfinite(sharpness_threshold) or sharpness_threshold <= 0:
+            return 0.0
+        if image.ndim == 3:
+            if image.shape[2] != 3:
+                return 0.0
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        elif image.ndim == 2:
+            gray = image
+        else:
+            return 0.0
+
         variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        if not np.isfinite(variance):
+            return 0.0
         return float(np.clip(variance / sharpness_threshold, 0.0, 1.0))
 
     @staticmethod
