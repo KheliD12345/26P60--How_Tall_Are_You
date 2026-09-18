@@ -4,7 +4,12 @@ from typing import Mapping
 import cv2
 import numpy as np
 
-from .advanced_models import Landmark, QualityAssessment, QualityMetrics
+from .advanced_models import (
+    Landmark,
+    QualityAssessment,
+    QualityLevel,
+    QualityMetrics,
+)
 
 
 def _point(value: Landmark | Mapping[str, float] | tuple[float, ...]) -> tuple[float, float]:
@@ -65,7 +70,10 @@ class AcquisitionQualityGate:
             if isinstance(value, Landmark):
                 confidences.append(value.visibility)
             elif isinstance(value, Mapping):
-                confidence = value.get("visibility", value.get("score"))
+                confidence = value.get(
+                    "visibility",
+                    value.get("confidence", value.get("score")),
+                )
                 if confidence is not None:
                     confidences.append(float(confidence))
             elif isinstance(value, (tuple, list)) and len(value) >= 3:
