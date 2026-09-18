@@ -58,7 +58,9 @@ class AcquisitionQualityGate:
         if "head_top" in keypoints and "head_bottom" in keypoints:
             top_x, top_y = _point(keypoints["head_top"])
             bottom_x, bottom_y = _point(keypoints["head_bottom"])
-            tilt = abs(degrees(np.arctan2(top_x - bottom_x, top_y - bottom_y)))
+            tilt = degrees(
+                np.arctan2(abs(top_x - bottom_x), abs(top_y - bottom_y))
+            )
             scores.append(float(np.clip(tilt / 30.0, 0.0, 1.0)))
 
         return float(np.mean(scores)) if scores else 0.5

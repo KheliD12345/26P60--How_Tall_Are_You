@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 class MeasurementMethod(str, Enum):
     GEOMETRIC = "geometric"
+    SKELETON = "skeleton"
+    HEAD_BBOX = "head_bbox"
     SMPL_BASED = "smpl_based"
     ANTHROPOMETRIC = "anthropometric"
     FUSION = "fusion"
@@ -169,6 +171,25 @@ def _round_value(value: float, places: int) -> float:
     )
 
 
+def _normalise_json_value(value: Any, field_name: str) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError(f"{field_name} values must be finite")
+        return value
+    if isinstance(value, Mapping):
+        normalised: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{field_name} mapping keys must be strings")
+            normalised[key] = _normalise_json_value(item, field_name)
+        return normalised
+    if isinstance(value, (list, tuple)):
+        return [_normalise_json_value(item, field_name) for item in value]
+    raise TypeError(f"{field_name} contains a value that is not JSON serialisable")
+
+
 @dataclass
 class BodyDetections:
     keypoints: Mapping[str, LandmarkValue] = field(default_factory=dict)
@@ -180,6 +201,7 @@ class BodyDetections:
     hair_bottom: LandmarkValue | None = None
     hand_lengths: tuple[tuple[LandmarkValue, LandmarkValue], ...] = ()
     segmentation_mask: Any | None = None
+    head_bbox_coordinate_system: str = "pixel"
 
     def __post_init__(self) -> None:
         self.keypoints = {
@@ -211,6 +233,10 @@ class BodyDetections:
             )
             for first, second in self.hand_lengths
         )
+        if self.head_bbox_coordinate_system not in {"normalized", "pixel"}:
+            raise ValueError(
+                "head_bbox coordinate system must be normalized or pixel"
+            )
 
     @staticmethod
     def _landmark_or_none(value: LandmarkValue | None) -> Landmark | None:
@@ -237,7 +263,7 @@ class QualityMetrics:
     pose_severity: float = 0.0
     blur_score: float = 1.0
     occlusion_score: float = 1.0
-    model_agreement: float = 1.0
+    model_agreement: float = 0.0
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -361,7 +387,11 @@ class HeightEstimate:
             "confidence",
             _bounded_score(self.confidence, "height estimate confidence"),
         )
-        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(
+            self,
+            "metadata",
+            _normalise_json_value(self.metadata, "height estimate metadata"),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -405,6 +435,8 @@ class MeasurementResult:
             raise ValueError("uncertainty bounds must be finite")
         if lower < 0.0 or lower > upper:
             raise ValueError("uncertainty range must have ordered non-negative bounds")
+        if not lower <= estimated_height_cm <= upper:
+            raise ValueError("estimated height must fall within uncertainty range")
         if not isinstance(self.quality, QualityAssessment):
             raise TypeError("measurement quality must be QualityAssessment")
 

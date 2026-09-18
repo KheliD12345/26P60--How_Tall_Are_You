@@ -25,6 +25,7 @@ def test_quality_gate_accepts_sharp_upright_image():
 
     assert assessment.passed
     assert assessment.metrics.level() == QualityLevel.HIGH
+    assert assessment.metrics.pose_severity == 0.0
 
 
 def test_quality_gate_rejects_blurred_image():
