@@ -4,6 +4,13 @@ from math import isfinite
 from typing import Any, Mapping
 
 
+class MeasurementMethod(str, Enum):
+    GEOMETRIC = "geometric"
+    SMPL_BASED = "smpl_based"
+    ANTHROPOMETRIC = "anthropometric"
+    FUSION = "fusion"
+
+
 class QualityLevel(Enum):
     HIGH = "high"
     MODERATE = "moderate"
@@ -135,31 +142,84 @@ class Landmark:
         return self.x, self.y
 
 
+LandmarkValue = (
+    Landmark
+    | Mapping[str, Any]
+    | tuple[float, ...]
+    | list[float]
+)
+
+
+def _bounded_score(value: float, field_name: str) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be numeric") from error
+    if not isfinite(score) or not 0.0 <= score <= 1.0:
+        raise ValueError(f"{field_name} must be between zero and one")
+    return score
+
+
 @dataclass
 class BodyDetections:
-    keypoints: dict[str, Landmark] = field(default_factory=dict)
-    head_top: Landmark | None = None
-    head_bottom: Landmark | None = None
+    keypoints: Mapping[str, LandmarkValue] = field(default_factory=dict)
+    head_top: LandmarkValue | None = None
+    head_bottom: LandmarkValue | None = None
     head_bbox: tuple[float, float, float, float] | None = None
     head_confidence: float = 0.0
-    hair_top: Landmark | None = None
-    hair_bottom: Landmark | None = None
-    hand_lengths: tuple[tuple[Landmark, Landmark], ...] = ()
+    hair_top: LandmarkValue | None = None
+    hair_bottom: LandmarkValue | None = None
+    hand_lengths: tuple[tuple[LandmarkValue, LandmarkValue], ...] = ()
     segmentation_mask: Any | None = None
 
+    def __post_init__(self) -> None:
+        self.keypoints = {
+            str(name): Landmark.from_value(value)
+            for name, value in self.keypoints.items()
+        }
+        self.head_top = self._landmark_or_none(self.head_top)
+        self.head_bottom = self._landmark_or_none(self.head_bottom)
+        self.hair_top = self._landmark_or_none(self.hair_top)
+        self.hair_bottom = self._landmark_or_none(self.hair_bottom)
+        self.head_confidence = _bounded_score(
+            self.head_confidence,
+            "head confidence",
+        )
+        if self.head_bbox is not None:
+            if len(self.head_bbox) != 4:
+                raise ValueError("head bounding box must contain four values")
+            try:
+                bbox = tuple(float(value) for value in self.head_bbox)
+            except (TypeError, ValueError) as error:
+                raise ValueError("head bounding box values must be numeric") from error
+            if not all(isfinite(value) for value in bbox):
+                raise ValueError("head bounding box values must be finite")
+            self.head_bbox = bbox
+        self.hand_lengths = tuple(
+            (
+                Landmark.from_value(first),
+                Landmark.from_value(second),
+            )
+            for first, second in self.hand_lengths
+        )
+
+    @staticmethod
+    def _landmark_or_none(value: LandmarkValue | None) -> Landmark | None:
+        return None if value is None else Landmark.from_value(value)
+
+    def heel_landmarks(self) -> tuple[Landmark, ...]:
+        heels: list[Landmark] = []
+        for side in ("left", "right"):
+            heel = self.keypoints.get(f"{side}_heel")
+            ankle = self.keypoints.get(f"{side}_ankle")
+            if heel is not None:
+                heels.append(heel)
+            elif ankle is not None:
+                heels.append(ankle)
+        return tuple(heels)
+
     def heel_points(self) -> tuple[Landmark, ...]:
-        heels = tuple(
-            self.keypoints[name]
-            for name in ("left_heel", "right_heel")
-            if name in self.keypoints
-        )
-        if heels:
-            return heels
-        return tuple(
-            self.keypoints[name]
-            for name in ("left_ankle", "right_ankle")
-            if name in self.keypoints
-        )
+        return self.heel_landmarks()
 
 
 @dataclass(frozen=True)
@@ -169,6 +229,20 @@ class QualityMetrics:
     blur_score: float = 1.0
     occlusion_score: float = 1.0
     model_agreement: float = 1.0
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "marker_visibility",
+            "pose_severity",
+            "blur_score",
+            "occlusion_score",
+            "model_agreement",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _bounded_score(getattr(self, field_name), field_name),
+            )
 
     def overall_score(self) -> float:
         return (
@@ -189,6 +263,9 @@ class QualityMetrics:
             return QualityLevel.LOW
         return QualityLevel.UNUSABLE
 
+    def overall_quality(self) -> QualityLevel:
+        return self.level()
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "marker_visibility": round(self.marker_visibility, 3),
@@ -207,6 +284,27 @@ class QualityAssessment:
     metrics: QualityMetrics
     recommendations: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.passed, bool):
+            raise ValueError("quality assessment passed must be a boolean")
+        if not isinstance(self.metrics, QualityMetrics):
+            raise TypeError("quality assessment metrics must be QualityMetrics")
+        recommendations = tuple(self.recommendations)
+        if any(
+            not isinstance(recommendation, str) or not recommendation.strip()
+            for recommendation in recommendations
+        ):
+            raise ValueError("quality recommendations must be non-empty strings")
+        object.__setattr__(self, "recommendations", recommendations)
+
+    @property
+    def overall_score(self) -> float:
+        return self.metrics.overall_score()
+
+    @property
+    def quality_level(self) -> QualityLevel:
+        return self.metrics.level()
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "passed": self.passed,
@@ -217,17 +315,52 @@ class QualityAssessment:
 
 @dataclass(frozen=True)
 class HeightEstimate:
-    method: str
+    method: MeasurementMethod | str
     height_cm: float
     confidence: float
     notes: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        try:
+            method = (
+                self.method
+                if isinstance(self.method, MeasurementMethod)
+                else MeasurementMethod(str(self.method))
+            )
+        except ValueError as error:
+            raise ValueError(
+                "height estimate method must be a supported measurement method"
+            ) from error
+
+        try:
+            height_cm = float(self.height_cm)
+        except (TypeError, ValueError) as error:
+            raise ValueError("height estimate must be numeric") from error
+        if not isfinite(height_cm) or height_cm <= 0.0:
+            raise ValueError("height estimate must be finite and positive")
+
+        if not isinstance(self.notes, str):
+            raise ValueError("height estimate notes must be a string")
+        if not isinstance(self.metadata, Mapping):
+            raise ValueError("height estimate metadata must be a mapping")
+
+        object.__setattr__(self, "method", method)
+        object.__setattr__(self, "height_cm", height_cm)
+        object.__setattr__(
+            self,
+            "confidence",
+            _bounded_score(self.confidence, "height estimate confidence"),
+        )
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "method": self.method,
+            "method": self.method.value,
             "height_cm": round(self.height_cm, 2),
             "confidence": round(self.confidence, 3),
             "notes": self.notes,
+            "metadata": dict(self.metadata),
         }
 
 
