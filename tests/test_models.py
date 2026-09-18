@@ -194,6 +194,7 @@ def test_body_detections_normalises_keypoints_and_falls_back_per_side():
     assert detections.head_top == Landmark(15.0, 5.0)
     assert detections.head_bottom == Landmark(15.0, 25.0)
     assert detections.head_confidence == 0.95
+    assert detections.head_bbox_coordinate_system == "pixel"
     assert detections.heel_landmarks() == (
         Landmark(10.0, 100.0, 0.9),
         Landmark(20.0, 101.0, 0.8),
@@ -266,10 +267,44 @@ def test_height_estimate_preserves_method_names_and_metadata():
     }
 
 
+def test_height_estimate_supports_independent_estimator_methods():
+    assert MeasurementMethod.SKELETON.value == "skeleton"
+    assert MeasurementMethod.HEAD_BBOX.value == "head_bbox"
+
+
+def test_empty_quality_metrics_are_not_high_confidence():
+    metrics = QualityMetrics()
+
+    assert metrics.overall_score() == pytest.approx(0.6)
+    assert metrics.level() == QualityLevel.MODERATE
+
+
+def test_height_estimate_rejects_non_json_metadata():
+    with pytest.raises((TypeError, ValueError)):
+        HeightEstimate(
+            method=MeasurementMethod.GEOMETRIC,
+            height_cm=172.0,
+            confidence=0.8,
+            metadata={"source": object()},
+        )
+
+
+def test_body_detections_validate_head_bbox_coordinate_system():
+    detections = BodyDetections(
+        head_bbox=(0.1, 0.2, 0.4, 0.8),
+        head_bbox_coordinate_system="normalized",
+    )
+
+    assert detections.head_bbox_coordinate_system == "normalized"
+
+    with pytest.raises(ValueError):
+        BodyDetections(head_bbox_coordinate_system="camera")
+
+
 def test_measurement_result_serialises_optional_estimates_and_diagnostics():
     quality = QualityAssessment(
         passed=True,
-        metrics=QualityMetrics(marker_visibility=0.75),
+        metrics=QualityMetrics(marker_visibility=0.75, model_agreement=1.0),
     )
     result = MeasurementResult(
         estimated_height_cm=172.345,

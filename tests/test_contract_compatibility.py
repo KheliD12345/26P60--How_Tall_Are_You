@@ -31,6 +31,8 @@ def test_contract_imports_preserve_public_names_and_aliases():
     assert AdvancedMeasurementResult is MeasurementResult
     assert GateQualityLevel is QualityLevel
     assert MeasurementMethod.GEOMETRIC.value == "geometric"
+    assert MeasurementMethod.SKELETON.value == "skeleton"
+    assert MeasurementMethod.HEAD_BBOX.value == "head_bbox"
     assert MeasurementMethod.SMPL_BASED.value == "smpl_based"
     assert MeasurementMethod.ANTHROPOMETRIC.value == "anthropometric"
 
@@ -95,6 +97,7 @@ def test_measurement_result_serialises_missing_optional_data_as_empty():
         {"estimated_height_cm": inf},
         {"uncertainty_range": (175.0, 170.0)},
         {"uncertainty_range": (-1.0, 170.0)},
+        {"estimated_height_cm": 180.0},
         {"fusion_weights": {"geometric": -0.1}},
         {"measurements": {"head_to_heel_cm": nan}},
     ],
@@ -129,6 +132,30 @@ def test_height_estimate_rejects_invalid_values(overrides):
 
     with pytest.raises(ValueError):
         HeightEstimate(**values)
+
+
+def test_height_estimate_normalises_nested_json_metadata():
+    estimate = HeightEstimate(
+        method=MeasurementMethod.GEOMETRIC,
+        height_cm=170.0,
+        confidence=0.8,
+        metadata={"sources": ("aruco", "pose"), "details": {"version": 1}},
+    )
+
+    assert estimate.to_dict()["metadata"] == {
+        "sources": ["aruco", "pose"],
+        "details": {"version": 1},
+    }
+
+
+def test_height_estimate_rejects_non_string_metadata_keys():
+    with pytest.raises(ValueError):
+        HeightEstimate(
+            method=MeasurementMethod.GEOMETRIC,
+            height_cm=170.0,
+            confidence=0.8,
+            metadata={1: "aruco"},
+        )
 
 
 def test_calibration_serialisation_remains_compatible():
