@@ -52,6 +52,17 @@ class AcquisitionQualityGate:
         return float(np.clip(variance / sharpness_threshold, 0.0, 1.0))
 
     @staticmethod
+    def marker_visibility(
+        detected_markers: int,
+        expected_markers: int = 4,
+    ) -> float:
+        if expected_markers <= 0:
+            return 0.0
+        return float(
+            np.clip(detected_markers / expected_markers, 0.0, 1.0)
+        )
+
+    @staticmethod
     def pose_severity(keypoints: Mapping[str, object]) -> float:
         scores: list[float] = []
         for side in ("left", "right"):
@@ -106,8 +117,9 @@ class AcquisitionQualityGate:
     ) -> QualityAssessment:
         keypoints = keypoints or {}
         metrics = QualityMetrics(
-            marker_visibility=float(
-                np.clip(detected_markers / max(1, expected_markers), 0.0, 1.0)
+            marker_visibility=self.marker_visibility(
+                detected_markers,
+                expected_markers,
             ),
             pose_severity=self.pose_severity(keypoints),
             blur_score=self.blur_score(image),
