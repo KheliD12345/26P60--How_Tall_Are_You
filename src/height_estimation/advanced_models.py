@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
+import json
 from math import isfinite
 from typing import Any, Mapping
 
@@ -158,6 +160,13 @@ def _bounded_score(value: float, field_name: str) -> float:
     if not isfinite(score) or not 0.0 <= score <= 1.0:
         raise ValueError(f"{field_name} must be between zero and one")
     return score
+
+
+def _round_value(value: float, places: int) -> float:
+    quantum = Decimal("1") if places == 0 else Decimal(f"1.{'0' * places}")
+    return float(
+        Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+    )
 
 
 @dataclass
@@ -365,33 +374,125 @@ class HeightEstimate:
 
 
 @dataclass(frozen=True)
-class AdvancedMeasurementResult:
+class MeasurementResult:
     estimated_height_cm: float
     uncertainty_range: tuple[float, float]
     quality: QualityAssessment
-    method_estimates: tuple[HeightEstimate, ...]
-    fusion_weights: dict[str, float]
-    measurements: dict[str, float]
+    method_estimates: tuple[HeightEstimate, ...] = ()
+    fusion_weights: Mapping[str, float] = field(default_factory=dict)
+    measurements: Mapping[str, float] = field(default_factory=dict)
+    diagnostics: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        try:
+            estimated_height_cm = float(self.estimated_height_cm)
+        except (TypeError, ValueError) as error:
+            raise ValueError("estimated height must be numeric") from error
+        if not isfinite(estimated_height_cm) or estimated_height_cm <= 0.0:
+            raise ValueError("estimated height must be finite and positive")
+
+        if len(self.uncertainty_range) != 2:
+            raise ValueError("uncertainty range must contain lower and upper bounds")
+        try:
+            lower, upper = (
+                float(self.uncertainty_range[0]),
+                float(self.uncertainty_range[1]),
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("uncertainty bounds must be numeric") from error
+        if not all(isfinite(value) for value in (lower, upper)):
+            raise ValueError("uncertainty bounds must be finite")
+        if lower < 0.0 or lower > upper:
+            raise ValueError("uncertainty range must have ordered non-negative bounds")
+        if not isinstance(self.quality, QualityAssessment):
+            raise TypeError("measurement quality must be QualityAssessment")
+
+        method_estimates = tuple(self.method_estimates or ())
+        if any(not isinstance(estimate, HeightEstimate) for estimate in method_estimates):
+            raise TypeError("method estimates must be HeightEstimate instances")
+
+        fusion_weights = self._normalise_measurements(
+            self.fusion_weights,
+            "fusion weights",
+            require_non_negative=True,
+        )
+        measurements = self._normalise_measurements(
+            self.measurements,
+            "measurements",
+            require_non_negative=False,
+        )
+        diagnostics = self._normalise_messages(self.diagnostics, "diagnostics")
+        warnings = self._normalise_messages(self.warnings, "warnings")
+
+        object.__setattr__(self, "estimated_height_cm", estimated_height_cm)
+        object.__setattr__(self, "uncertainty_range", (lower, upper))
+        object.__setattr__(self, "method_estimates", method_estimates)
+        object.__setattr__(self, "fusion_weights", fusion_weights)
+        object.__setattr__(self, "measurements", measurements)
+        object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(self, "warnings", warnings)
+
+    @staticmethod
+    def _normalise_measurements(
+        values: Mapping[str, float] | None,
+        field_name: str,
+        *,
+        require_non_negative: bool,
+    ) -> dict[str, float]:
+        if values is None:
+            return {}
+        if not isinstance(values, Mapping):
+            raise TypeError(f"{field_name} must be a mapping")
+        normalised: dict[str, float] = {}
+        for name, value in values.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"{field_name} names must be non-empty strings")
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{field_name} values must be numeric") from error
+            if not isfinite(numeric_value):
+                raise ValueError(f"{field_name} values must be finite")
+            if require_non_negative and numeric_value < 0.0:
+                raise ValueError(f"{field_name} values cannot be negative")
+            normalised[name] = numeric_value
+        return dict(sorted(normalised.items()))
+
+    @staticmethod
+    def _normalise_messages(values: tuple[str, ...] | None, field_name: str) -> tuple[str, ...]:
+        messages = tuple(values or ())
+        if any(not isinstance(message, str) or not message.strip() for message in messages):
+            raise ValueError(f"{field_name} must contain non-empty strings")
+        return messages
 
     def to_dict(self) -> dict[str, Any]:
         lower, upper = self.uncertainty_range
         return {
-            "estimated_height_cm": round(self.estimated_height_cm, 2),
+            "estimated_height_cm": _round_value(self.estimated_height_cm, 2),
             "uncertainty_range": {
-                "lower_cm": round(lower, 2),
-                "upper_cm": round(upper, 2),
-                "total_range_cm": round(upper - lower, 2),
+                "lower_cm": _round_value(lower, 2),
+                "upper_cm": _round_value(upper, 2),
+                "total_range_cm": _round_value(upper - lower, 2),
             },
             "quality": self.quality.to_dict(),
             "method_estimates": [
                 estimate.to_dict() for estimate in self.method_estimates
             ],
             "fusion_weights": {
-                name: round(weight, 3)
+                name: _round_value(weight, 3)
                 for name, weight in self.fusion_weights.items()
             },
             "measurements": {
-                name: round(value, 2)
+                name: _round_value(value, 2)
                 for name, value in self.measurements.items()
             },
+            "diagnostics": list(self.diagnostics),
+            "warnings": list(self.warnings),
         }
+
+    def to_json(self, *, indent: int | None = None) -> str:
+        return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
+
+
+AdvancedMeasurementResult = MeasurementResult

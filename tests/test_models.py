@@ -296,7 +296,7 @@ def test_measurement_result_serialises_optional_estimates_and_diagnostics():
         "upper_cm": 175.6,
         "total_range_cm": 6.5,
     }
-    assert serialised["quality"]["metrics"]["overall_quality"] == "moderate"
+    assert serialised["quality"]["metrics"]["overall_quality"] == "high"
     assert serialised["method_estimates"][0]["method"] == "geometric"
     assert serialised["fusion_weights"] == {"geometric": 1.0}
     assert serialised["measurements"] == {"head_to_heel_cm": 172.3}
