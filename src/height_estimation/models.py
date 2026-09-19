@@ -4,6 +4,8 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
+import cv2
+
 from .height import calculate_height_cm
 
 
@@ -13,6 +15,14 @@ class MarkerPosition:
     name: str
     x_cm: float
     y_cm: float
+
+    def __post_init__(self) -> None:
+        if self.id < 0:
+            raise ValueError("marker IDs must be non-negative")
+        if not self.name.strip():
+            raise ValueError("marker names must not be empty")
+        if not all(isfinite(value) for value in (self.x_cm, self.y_cm)):
+            raise ValueError("marker positions must have finite coordinates")
 
 
 @dataclass(frozen=True)
@@ -159,20 +169,27 @@ class MarkerLayout:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MarkerLayout":
-        markers = tuple(
-            MarkerPosition(
-                id=int(marker["id"]),
-                name=str(marker["name"]),
-                x_cm=float(marker["x_cm"]),
-                y_cm=float(marker["y_cm"]),
+        if not isinstance(data, dict):
+            raise ValueError("marker layout must be a JSON object")
+
+        try:
+            marker_data = data["markers"]
+            markers = tuple(
+                MarkerPosition(
+                    id=int(marker["id"]),
+                    name=str(marker["name"]),
+                    x_cm=float(marker["x_cm"]),
+                    y_cm=float(marker["y_cm"]),
+                )
+                for marker in marker_data
             )
-            for marker in data["markers"]
-        )
-        layout = cls(
-            dictionary=str(data["dictionary"]),
-            marker_size_cm=float(data["marker_size_cm"]),
-            markers=markers,
-        )
+            layout = cls(
+                dictionary=str(data["dictionary"]),
+                marker_size_cm=float(data["marker_size_cm"]),
+                markers=markers,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("malformed marker layout configuration") from error
         layout.validate()
         return layout
 
@@ -186,11 +203,19 @@ class MarkerLayout:
         return tuple(marker.id for marker in self.markers)
 
     def validate(self) -> None:
-        if not self.dictionary.startswith("DICT_"):
+        if not isinstance(self.dictionary, str) or not self.dictionary.startswith("DICT_"):
             raise ValueError("dictionary must be an OpenCV ArUco dictionary name")
-        if self.marker_size_cm <= 0:
+        if not hasattr(cv2.aruco, self.dictionary):
+            raise ValueError(f"unknown ArUco dictionary: {self.dictionary}")
+        if not isfinite(self.marker_size_cm) or self.marker_size_cm <= 0:
             raise ValueError("marker_size_cm must be greater than zero")
         if len(self.markers) < 2:
             raise ValueError("at least two marker positions are required")
         if len(set(self.marker_ids)) != len(self.marker_ids):
             raise ValueError("marker IDs must be unique")
+        names = [marker.name for marker in self.markers]
+        if len(set(names)) != len(names):
+            raise ValueError("marker names must be unique")
+        positions = [(marker.x_cm, marker.y_cm) for marker in self.markers]
+        if len(set(positions)) != len(positions):
+            raise ValueError("marker physical positions must be unique")

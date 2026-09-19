@@ -174,3 +174,71 @@ def test_rejects_homography_with_too_few_layout_points():
 
     with pytest.raises(ValueError, match="at least four"):
         estimate_homography((), layout)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("dictionary", "DICT_NOT_REAL", "unknown ArUco dictionary"),
+        ("marker_size_cm", 0, "marker_size_cm"),
+    ],
+)
+def test_rejects_invalid_layout_values(field, value, message):
+    data = {
+        "dictionary": "DICT_4X4_50",
+        "marker_size_cm": 18,
+        "markers": [
+            {"id": 0, "name": "a", "x_cm": 0, "y_cm": 0},
+            {"id": 1, "name": "b", "x_cm": 1, "y_cm": 0},
+        ],
+    }
+    data[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        MarkerLayout.from_dict(data)
+
+
+def test_rejects_duplicate_physical_positions():
+    with pytest.raises(ValueError, match="physical positions"):
+        MarkerLayout.from_dict(
+            {
+                "dictionary": "DICT_4X4_50",
+                "marker_size_cm": 18,
+                "markers": [
+                    {"id": 0, "name": "a", "x_cm": 0, "y_cm": 0},
+                    {"id": 1, "name": "b", "x_cm": 0, "y_cm": 0},
+                ],
+            }
+        )
+
+
+def test_rejects_collinear_homography_points():
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=((0.0, 0.0),) * 4,
+            center_x=marker_id * 10.0,
+            center_y=0.0,
+            area_px=1.0,
+        )
+        for marker_id in range(4)
+    )
+
+    with pytest.raises(ValueError, match="collinear"):
+        estimate_homography(markers, make_layout())
+
+
+def test_rejects_zero_pixel_pair_distance():
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=((0.0, 0.0),) * 4,
+            center_x=0.0 if marker_id < 2 else marker_id * 10.0,
+            center_y=0.0,
+            area_px=1.0,
+        )
+        for marker_id in range(4)
+    )
+
+    with pytest.raises(ValueError, match="pixel distances"):
+        calculate_pairwise_geometry(markers, make_layout())

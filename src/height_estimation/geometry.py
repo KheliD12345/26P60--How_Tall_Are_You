@@ -17,7 +17,10 @@ def calculate_pairwise_geometry(
     markers: tuple[DetectedMarker, ...],
     layout: MarkerLayout,
 ) -> tuple[MarkerPairGeometry, ...]:
+    layout.validate()
     detected_by_id = {marker.id: marker for marker in markers}
+    if len(detected_by_id) != len(markers):
+        raise ValueError("duplicate marker detections cannot define geometry")
     missing_ids = [
         marker.id for marker in layout.markers if marker.id not in detected_by_id
     ]
@@ -38,14 +41,22 @@ def calculate_pairwise_geometry(
                 second.x_cm - first.x_cm,
                 second.y_cm - first.y_cm,
             )
+            pixel_distance = hypot(*pixel_delta)
+            physical_distance_cm = hypot(*physical_delta)
+            if pixel_distance <= 1e-6:
+                raise ValueError("marker pixel distances must be greater than zero")
+            if physical_distance_cm <= 1e-6:
+                raise ValueError(
+                    "marker physical distances must be greater than zero"
+                )
             measurements.append(
                 MarkerPairGeometry(
                     first_id=first.id,
                     second_id=second.id,
                     pixel_delta=pixel_delta,
                     physical_delta_cm=physical_delta,
-                    pixel_distance=hypot(*pixel_delta),
-                    physical_distance_cm=hypot(*physical_delta),
+                    pixel_distance=pixel_distance,
+                    physical_distance_cm=physical_distance_cm,
                 )
             )
 
@@ -56,9 +67,9 @@ def estimate_cm_per_pixel(geometry: tuple[MarkerPairGeometry, ...]) -> float:
     ratios = [
         pair.physical_distance_cm / pair.pixel_distance
         for pair in geometry
-        if pair.physical_distance_cm > 0 and pair.pixel_distance > 0
+        if pair.physical_distance_cm > 1e-6 and pair.pixel_distance > 1e-6
     ]
-    if not ratios:
+    if not ratios or not all(np.isfinite(ratio) and ratio > 0 for ratio in ratios):
         raise ValueError("could not estimate scale from marker geometry")
     return float(median(ratios))
 
@@ -69,8 +80,11 @@ def estimate_homography(
 ) -> HomographyResult:
     if len(layout.markers) < 4:
         raise ValueError("at least four marker positions are required")
+    layout.validate()
 
     detected_by_id = {marker.id: marker for marker in markers}
+    if len(detected_by_id) != len(markers):
+        raise ValueError("duplicate marker detections cannot define homography")
     missing_ids = [
         marker.id for marker in layout.markers if marker.id not in detected_by_id
     ]
@@ -92,13 +106,27 @@ def estimate_homography(
         [[marker.x_cm, marker.y_cm] for marker in layout.markers],
         dtype=np.float32,
     )
-    matrix, _ = cv2.findHomography(pixel_points, physical_points, method=0)
+    if not np.isfinite(pixel_points).all():
+        raise ValueError("marker pixel coordinates must be finite")
+    if np.linalg.matrix_rank(pixel_points - pixel_points[0]) < 2:
+        raise ValueError("marker pixel coordinates are collinear")
+    if np.linalg.matrix_rank(physical_points - physical_points[0]) < 2:
+        raise ValueError("marker physical positions are collinear")
+
+    try:
+        matrix, _ = cv2.findHomography(pixel_points, physical_points, method=0)
+    except cv2.error as error:
+        raise ValueError("could not calculate marker homography") from error
     if matrix is None:
         raise ValueError("could not calculate marker homography")
+    if not np.isfinite(matrix).all():
+        raise ValueError("marker homography must contain finite values")
 
     projected_points = cv2.perspectiveTransform(
         pixel_points.reshape(-1, 1, 2), matrix
     ).reshape(-1, 2)
+    if not np.isfinite(projected_points).all():
+        raise ValueError("marker homography produced non-finite coordinates")
     errors = np.linalg.norm(projected_points - physical_points, axis=1)
     return HomographyResult(
         matrix=tuple(tuple(float(value) for value in row) for row in matrix),
