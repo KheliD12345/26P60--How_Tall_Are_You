@@ -7,8 +7,10 @@ This module only defines their target-side contract and normalises their output.
 from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
+from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
+import cv2
 import numpy as np
 
 from .advanced_models import BodyDetections, Landmark
@@ -381,6 +383,8 @@ def _hand_payload(value: object) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     if not isinstance(value, Mapping):
         raise ValueError("hand output must be a mapping")
     payload = value.get("hands", value.get("hand_detections", value))
+    if payload == {}:
+        return value, {"hands": []}
     if not isinstance(payload, (list, tuple)):
         raise ValueError("hands must be a list")
     return value, {"hands": payload}
@@ -812,17 +816,138 @@ def build_body_detection_result(
     """Merge detector results without allowing empty outputs to erase data."""
     detections = BodyDetections()
     diagnostics: list[str] = []
+    normalised_results = dict(results)
     for name, result in results.items():
         if not isinstance(result, DetectorResult):
             raise TypeError(f"{name} result must be a DetectorResult")
         diagnostics.extend(result.diagnostics)
         if result.available:
-            detections = merge_body_detections(detections, result.detections)
+            try:
+                detections = merge_body_detections(detections, result.detections)
+            except ValueError as error:
+                message = f"could not merge {name} detections: {error}"
+                diagnostics.append(message)
+                normalised_results[name] = DetectorResult(
+                    detector=name,
+                    status=DetectionStatus.FAILED,
+                    diagnostics=(message,),
+                )
     return BodyDetectionResult(
         detections=detections,
-        detector_results=results,
+        detector_results=normalised_results,
         diagnostics=tuple(diagnostics),
     )
+
+
+def _adapt_detector(
+    name: str,
+    detector: object | None,
+) -> object:
+    if detector is None:
+        return UnavailableDetector(name)
+    if isinstance(
+        detector,
+        (
+            _NormalisingAdapter,
+            PersonFallbackAdapter,
+            UnavailableDetector,
+        ),
+    ):
+        return detector
+    if name == "pose":
+        return PoseDetectorAdapter(detector)  # type: ignore[arg-type]
+    if name == "head":
+        return HeadDetectorAdapter(detector)  # type: ignore[arg-type]
+    if name == "segmentation":
+        return SegmentationDetectorAdapter(detector)  # type: ignore[arg-type]
+    if name == "hands":
+        return HandDetectorAdapter(detector)  # type: ignore[arg-type]
+    raise ValueError(f"unsupported body detector: {name}")
+
+
+class BodyDetectionOrchestrator:
+    """Run configured body detectors and retain partial results."""
+
+    def __init__(
+        self,
+        *,
+        pose_detector: object | None = None,
+        head_detector: object | None = None,
+        segmentation_detector: object | None = None,
+        hand_detector: object | None = None,
+        use_person_fallback: bool = True,
+    ) -> None:
+        self.detectors = {
+            "pose": _adapt_detector("pose", pose_detector),
+            "head": _adapt_detector("head", head_detector),
+            "segmentation": _adapt_detector(
+                "segmentation",
+                segmentation_detector,
+            ),
+            "hands": _adapt_detector("hands", hand_detector),
+        }
+        if use_person_fallback:
+            self.detectors["person_fallback"] = PersonFallbackAdapter()
+
+    @staticmethod
+    def _load_image(image: str | Path | np.ndarray) -> tuple[np.ndarray | None, str | None]:
+        if isinstance(image, np.ndarray):
+            if image.size == 0 or image.ndim not in {2, 3}:
+                return None, "image must be a non-empty two- or three-dimensional array"
+            if image.ndim == 3 and image.shape[2] not in {1, 3, 4}:
+                return None, "image must have one, three, or four channels"
+            return image, None
+        try:
+            image_array = cv2.imread(str(image), cv2.IMREAD_UNCHANGED)
+        except (TypeError, ValueError) as error:
+            return None, f"could not read image: {error}"
+        if image_array is None or image_array.size == 0:
+            return None, f"could not read image: {image}"
+        return image_array, None
+
+    def detect(self, image: str | Path | np.ndarray) -> BodyDetectionResult:
+        """Detect a body from an image path or an already-loaded image array."""
+        image_array, error = self._load_image(image)
+        if image_array is None:
+            message = error or "could not read image"
+            input_result = DetectorResult(
+                detector="input",
+                status=DetectionStatus.FAILED,
+                diagnostics=(message,),
+            )
+            return BodyDetectionResult(
+                detector_results={"input": input_result},
+                diagnostics=(message,),
+            )
+
+        results: dict[str, DetectorResult] = {}
+        for name, detector in self.detectors.items():
+            try:
+                result = detector.detect(image_array)  # type: ignore[attr-defined]
+            except Exception as error:
+                result = DetectorResult(
+                    detector=name,
+                    status=DetectionStatus.FAILED,
+                    diagnostics=(f"{name} failed: {error}",),
+                )
+            if not isinstance(result, DetectorResult):
+                result = DetectorResult(
+                    detector=name,
+                    status=DetectionStatus.FAILED,
+                    diagnostics=(
+                        f"{name} returned an invalid detector result",
+                    ),
+                )
+            results[name] = result
+        return build_body_detection_result(results)
+
+    def detect_all(self, image: str | Path | np.ndarray) -> BodyDetectionResult:
+        """Compatibility name for callers of the legacy Layer 3 interface."""
+        return self.detect(image)
+
+
+UnifiedBodyDetector = BodyDetectionOrchestrator
+HumanBodyUnderstanding = BodyDetectionOrchestrator
 
 
 # American spelling is kept as a small compatibility alias for callers.
