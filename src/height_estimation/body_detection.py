@@ -245,6 +245,232 @@ def normalise_head_detection(
     )
 
 
+def _mask_array(value: object) -> np.ndarray:
+    try:
+        mask = np.asarray(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("segmentation mask must be array-like") from error
+    if mask.ndim < 2:
+        raise ValueError("segmentation mask must have at least two dimensions")
+    if mask.dtype.kind not in "biuf":
+        raise ValueError("segmentation mask must contain numeric values")
+    if mask.dtype.kind == "f" and not np.isfinite(mask).all():
+        raise ValueError("segmentation mask values must be finite")
+    return mask.copy()
+
+
+def _segmentation_payload(value: object) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("segmentation output must be a mapping")
+    payload = value.get("segmentation", value)
+    if not isinstance(payload, Mapping):
+        raise ValueError("segmentation data must be a mapping")
+    return payload
+
+
+def _endpoint_from_value(
+    value: object,
+    *,
+    mask: np.ndarray | None,
+    coordinate_system: str,
+    top: bool,
+) -> Landmark:
+    system = _coordinate_system(coordinate_system)
+    local_value = value
+    local_system = system
+    if isinstance(value, Mapping):
+        local_system = value.get("coordinate_system", system)
+        if "coordinate_system" not in value and "normalized" in value:
+            local_system = "normalized" if value["normalized"] else "pixel"
+        local_system = _coordinate_system(local_system)
+        y_value = value.get("y")
+        if y_value is None:
+            raise ValueError("hair endpoint requires a y coordinate")
+        x_value = value.get("x")
+        if x_value is None:
+            local_value = y_value
+        else:
+            return _normalise_landmark(value, local_system)
+    elif isinstance(value, (tuple, list)):
+        return _normalise_landmark(value, local_system)
+
+    try:
+        y_value = float(local_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("hair endpoint y coordinate must be numeric") from error
+    x_value = 0.0
+    if mask is not None:
+        row = y_value
+        if local_system == "normalized":
+            row *= max(0, mask.shape[0] - 1)
+        target_row = max(0, min(mask.shape[0] - 1, int(round(row))))
+        row_order = sorted(
+            range(mask.shape[0]),
+            key=lambda candidate: abs(candidate - target_row),
+        )
+        columns = np.array([], dtype=int)
+        for candidate in row_order:
+            row_values = mask[candidate]
+            if row_values.ndim > 1:
+                row_values = np.any(
+                    row_values != 0,
+                    axis=tuple(range(1, row_values.ndim)),
+                )
+            columns = np.flatnonzero(row_values != 0)
+            if columns.size:
+                break
+        if columns.size:
+            x_value = float(columns.mean())
+            if local_system == "normalized":
+                x_value /= max(1, mask.shape[1] - 1)
+    return Landmark(x_value, y_value, coordinate_system=local_system)
+
+
+def normalise_segmentation(
+    value: object,
+    *,
+    mask_coordinate_system: str | None = None,
+    landmark_coordinate_system: str | None = None,
+) -> BodyDetections:
+    """Convert body or hair segmentation output into ``BodyDetections``."""
+    if isinstance(value, BodyDetections):
+        return value
+    payload = _segmentation_payload(value)
+    raw_mask = payload.get("segmentation_mask", payload.get("mask"))
+    mask = None if raw_mask is None else _mask_array(raw_mask)
+
+    hair = payload.get("hair_length", payload.get("hair", {}))
+    if hair is None:
+        hair = {}
+    if not isinstance(hair, Mapping):
+        raise ValueError("hair endpoints must be a mapping")
+    top_value = payload.get("hair_top", hair.get("top"))
+    bottom_value = payload.get("hair_bottom", hair.get("bottom"))
+    landmark_system = _coordinate_system(
+        landmark_coordinate_system
+        or payload.get("landmark_coordinate_system")
+        or payload.get("hair_coordinate_system")
+        or "normalized"
+    )
+    return BodyDetections(
+        segmentation_mask=mask,
+        hair_top=(
+            None
+            if top_value is None
+            else _endpoint_from_value(
+                top_value,
+                mask=mask,
+                coordinate_system=landmark_system,
+                top=True,
+            )
+        ),
+        hair_bottom=(
+            None
+            if bottom_value is None
+            else _endpoint_from_value(
+                bottom_value,
+                mask=mask,
+                coordinate_system=landmark_system,
+                top=False,
+            )
+        ),
+    )
+
+
+def _hand_payload(value: object) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    if not isinstance(value, Mapping):
+        raise ValueError("hand output must be a mapping")
+    payload = value.get("hands", value.get("hand_detections", value))
+    if not isinstance(payload, (list, tuple)):
+        raise ValueError("hands must be a list")
+    return value, {"hands": payload}
+
+
+def _hand_label(value: object) -> str:
+    if value is None:
+        return "unknown"
+    label = str(value).strip().lower()
+    if label in {"left", "right"}:
+        return label
+    if label in {"unknown", "none", ""}:
+        return "unknown"
+    raise ValueError("handedness must be left, right, or unknown")
+
+
+def _hand_pair(
+    hand: Mapping[str, Any],
+    coordinate_system: str,
+) -> tuple[Landmark, Landmark]:
+    length = hand.get("hand_length", hand.get("hand_lengths"))
+    if isinstance(length, Mapping):
+        first = length.get("landmark_0", length.get("wrist"))
+        second = length.get(
+            "landmark_12",
+            length.get("middle_tip", length.get("fingertip")),
+        )
+    elif isinstance(length, (list, tuple)) and len(length) == 2:
+        first, second = length
+    else:
+        all_landmarks = hand.get("all_landmarks", hand.get("landmarks", {}))
+        if not isinstance(all_landmarks, Mapping):
+            raise ValueError("hand length endpoints are missing")
+        first = all_landmarks.get("landmark_0", all_landmarks.get("wrist"))
+        second = all_landmarks.get(
+            "landmark_12",
+            all_landmarks.get("middle_tip", all_landmarks.get("fingertip")),
+        )
+    if first is None or second is None:
+        raise ValueError("hand length requires wrist and middle fingertip")
+    return (
+        _normalise_landmark(first, coordinate_system),
+        _normalise_landmark(second, coordinate_system),
+    )
+
+
+def normalise_hand_detection(
+    value: object,
+    *,
+    coordinate_system: str | None = None,
+) -> BodyDetections:
+    """Convert MediaPipe-style hand output without silently flipping labels."""
+    if isinstance(value, BodyDetections):
+        return value
+    root, payload = _hand_payload(value)
+    convention = str(
+        root.get("handedness_convention", "subject")
+    ).lower()
+    if convention in {"image", "image_perspective", "mediapipe"}:
+        raise ValueError(
+            "image-perspective handedness must be corrected before normalisation"
+        )
+    if root.get("labels_are_subject_relative") is False:
+        raise ValueError("handedness labels must be subject-relative")
+    system = _coordinate_system(
+        coordinate_system
+        or root.get("coordinate_system")
+        or ("normalized" if root.get("normalized", True) else "pixel")
+    )
+    hands = payload["hands"]
+    pairs: list[tuple[Landmark, Landmark]] = []
+    labels: list[str] = []
+    confidences: list[float] = []
+    for hand in hands:
+        if not isinstance(hand, Mapping):
+            raise ValueError("each hand detection must be a mapping")
+        pairs.append(_hand_pair(hand, system))
+        labels.append(_hand_label(hand.get("handedness", hand.get("label"))))
+        confidence = hand.get("confidence", hand.get("score", 1.0))
+        try:
+            confidences.append(float(confidence))
+        except (TypeError, ValueError) as error:
+            raise ValueError("hand confidence must be numeric") from error
+    return BodyDetections(
+        hand_lengths=tuple(pairs),
+        handedness=tuple(labels),
+        hand_confidences=tuple(confidences),
+    )
+
+
 def body_detections_from_person(person: PersonEndpoints) -> BodyDetections:
     """Represent HOG endpoints without inventing intermediate pose points."""
     confidence = max(0.0, min(1.0, float(person.score)))
@@ -271,6 +497,8 @@ def merge_body_detections(
 ) -> BodyDetections:
     """Fill missing fields from ``secondary`` while retaining valid values."""
     keypoints = dict(secondary.keypoints)
+    hand_lengths = primary.hand_lengths or secondary.hand_lengths
+    hand_source = primary if primary.hand_lengths else secondary
     for name, landmark in primary.keypoints.items():
         other = keypoints.get(name)
         if other is not None and other.coordinate_system != landmark.coordinate_system:
@@ -297,7 +525,9 @@ def merge_body_detections(
         ),
         hair_top=primary.hair_top or secondary.hair_top,
         hair_bottom=primary.hair_bottom or secondary.hair_bottom,
-        hand_lengths=primary.hand_lengths or secondary.hand_lengths,
+        hand_lengths=hand_lengths,
+        handedness=hand_source.handedness,
+        hand_confidences=hand_source.hand_confidences,
         segmentation_mask=(
             primary.segmentation_mask
             if primary.segmentation_mask is not None
@@ -468,6 +698,15 @@ class _NormalisingAdapter:
             metadata = raw["metadata"]
         metadata = dict(metadata)
         metadata.setdefault("total_keypoints", len(detections.keypoints))
+        if detections.segmentation_mask is not None:
+            metadata.setdefault("mask_shape", tuple(detections.segmentation_mask.shape))
+            if isinstance(raw, Mapping):
+                metadata.setdefault(
+                    "mask_coordinate_system",
+                    raw.get("mask_coordinate_system", "pixel"),
+                )
+        if detections.hand_lengths:
+            metadata.setdefault("hand_count", len(detections.hand_lengths))
         return DetectorResult(
             self.name,
             status,
@@ -482,6 +721,10 @@ class _NormalisingAdapter:
             or detections.head_top
             or detections.head_bottom
             or detections.head_bbox is not None
+            or detections.segmentation_mask is not None
+            or detections.hair_top
+            or detections.hair_bottom
+            or bool(detections.hand_lengths)
         )
 
 
@@ -499,6 +742,22 @@ class HeadDetectorAdapter(_NormalisingAdapter):
 
     def detect(self, image: np.ndarray) -> DetectorResult:
         return self._result(image, normalise_head_detection)
+
+
+class SegmentationDetectorAdapter(_NormalisingAdapter):
+    def __init__(self, detector: Callable[[np.ndarray], object] | ImageDetector):
+        super().__init__(detector, "segmentation")
+
+    def detect(self, image: np.ndarray) -> DetectorResult:
+        return self._result(image, normalise_segmentation)
+
+
+class HandDetectorAdapter(_NormalisingAdapter):
+    def __init__(self, detector: Callable[[np.ndarray], object] | ImageDetector):
+        super().__init__(detector, "hands")
+
+    def detect(self, image: np.ndarray) -> DetectorResult:
+        return self._result(image, normalise_hand_detection)
 
 
 class PersonFallbackAdapter:
