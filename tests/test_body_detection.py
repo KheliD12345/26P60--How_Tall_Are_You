@@ -1,4 +1,5 @@
 import cv2
+import json
 import numpy as np
 import pytest
 
@@ -490,6 +491,48 @@ def test_merge_rejects_coordinate_system_mismatch():
             BodyDetections(keypoints={"left_hip": Landmark(10, 20, normalized=False)}),
             BodyDetections(keypoints={"left_hip": Landmark(0.1, 0.2)}),
         )
+
+
+def test_merge_rejects_mismatched_head_endpoint_coordinate_systems():
+    with pytest.raises(ValueError, match="head endpoints"):
+        merge_body_detections(
+            BodyDetections(
+                head_top=Landmark(10, 20, normalized=False),
+            ),
+            BodyDetections(
+                head_bottom=Landmark(0.1, 0.2),
+            ),
+        )
+
+
+def test_body_detection_result_serialises_all_detection_fields():
+    result = BodyDetectionResult(
+        detections=BodyDetections(
+            head_top=Landmark(10, 20, normalized=False),
+            head_bottom=Landmark(10, 50, normalized=False),
+            head_bbox=(5, 10, 15, 55),
+            head_confidence=0.9,
+            hair_top=Landmark(10, 5, normalized=False),
+            hair_bottom=Landmark(10, 60, normalized=False),
+            hand_lengths=(
+                (
+                    Landmark(0.1, 0.5),
+                    Landmark(0.1, 0.4),
+                ),
+            ),
+            handedness=("left",),
+            hand_confidences=(0.8,),
+            segmentation_mask=np.ones((2, 2), dtype=np.uint8),
+        ),
+    )
+
+    payload = result.to_dict()
+
+    assert payload["detections"]["head_bbox"] == [5, 10, 15, 55]
+    assert payload["detections"]["handedness"] == ["left"]
+    assert payload["detections"]["segmentation_mask"] == [[1, 1], [1, 1]]
+    assert payload["detections"]["hair_top"]["coordinate_system"] == "pixel"
+    json.dumps(payload)
 
 
 def test_person_fallback_adapter_accepts_numpy_images(monkeypatch):
