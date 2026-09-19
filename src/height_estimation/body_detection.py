@@ -509,26 +509,42 @@ def merge_body_detections(
             raise ValueError(f"coordinate system mismatch for keypoint: {name}")
         keypoints[name] = landmark
 
-    if (
-        primary.head_bbox is not None
-        and secondary.head_bbox is not None
-        and primary.head_bbox_coordinate_system
-        != secondary.head_bbox_coordinate_system
-    ):
-        raise ValueError("head bounding box coordinate systems do not match")
+    head_top = primary.head_top or secondary.head_top
+    head_bottom = primary.head_bottom or secondary.head_bottom
+    head_bbox = primary.head_bbox or secondary.head_bbox
+    head_bbox_coordinate_system = (
+        primary.head_bbox_coordinate_system
+        if primary.head_bbox is not None
+        else secondary.head_bbox_coordinate_system
+    )
+    hair_top = primary.hair_top or secondary.hair_top
+    hair_bottom = primary.hair_bottom or secondary.hair_bottom
+    _validate_coordinate_systems("keypoints", tuple(keypoints.values()))
+    _validate_coordinate_systems("head endpoints", (head_top, head_bottom))
+    if head_bbox is not None:
+        _validate_coordinate_systems(
+            "head detection",
+            (head_top, head_bottom),
+            head_bbox_coordinate_system,
+        )
+    _validate_coordinate_systems("hair endpoints", (hair_top, hair_bottom))
+    _validate_coordinate_systems(
+        "hand landmarks",
+        tuple(point for pair in hand_lengths for point in pair),
+    )
 
     return BodyDetections(
         keypoints=keypoints,
-        head_top=primary.head_top or secondary.head_top,
-        head_bottom=primary.head_bottom or secondary.head_bottom,
-        head_bbox=primary.head_bbox or secondary.head_bbox,
+        head_top=head_top,
+        head_bottom=head_bottom,
+        head_bbox=head_bbox,
         head_confidence=(
             primary.head_confidence
             if primary.head_bbox is not None
             else secondary.head_confidence
         ),
-        hair_top=primary.hair_top or secondary.hair_top,
-        hair_bottom=primary.hair_bottom or secondary.hair_bottom,
+        hair_top=hair_top,
+        hair_bottom=hair_bottom,
         hand_lengths=hand_lengths,
         handedness=hand_source.handedness,
         hand_confidences=hand_source.hand_confidences,
@@ -537,12 +553,79 @@ def merge_body_detections(
             if primary.segmentation_mask is not None
             else secondary.segmentation_mask
         ),
-        head_bbox_coordinate_system=(
-            primary.head_bbox_coordinate_system
-            if primary.head_bbox is not None
-            else secondary.head_bbox_coordinate_system
-        ),
+        head_bbox_coordinate_system=head_bbox_coordinate_system,
     )
+
+
+def _validate_coordinate_systems(
+    field_name: str,
+    landmarks: tuple[Landmark | None, ...],
+    extra_system: str | None = None,
+) -> None:
+    systems = {
+        landmark.coordinate_system
+        for landmark in landmarks
+        if landmark is not None
+    }
+    if extra_system is not None:
+        systems.add(extra_system)
+    if len(systems) > 1:
+        raise ValueError(f"coordinate system mismatch for {field_name}")
+
+
+def _landmark_to_dict(landmark: Landmark | None) -> dict[str, Any] | None:
+    if landmark is None:
+        return None
+    return {
+        "x": landmark.x,
+        "y": landmark.y,
+        "visibility": landmark.visibility,
+        "coordinate_system": landmark.coordinate_system,
+    }
+
+
+def _serialise_detection_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Mapping):
+        return {
+            str(key): _serialise_detection_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (tuple, list)):
+        return [_serialise_detection_value(item) for item in value]
+    return value
+
+
+def _detections_to_dict(detections: BodyDetections) -> dict[str, Any]:
+    return {
+        "keypoints": {
+            name: _landmark_to_dict(landmark)
+            for name, landmark in detections.keypoints.items()
+        },
+        "head_top": _landmark_to_dict(detections.head_top),
+        "head_bottom": _landmark_to_dict(detections.head_bottom),
+        "head_bbox": (
+            None
+            if detections.head_bbox is None
+            else list(detections.head_bbox)
+        ),
+        "head_bbox_coordinate_system": detections.head_bbox_coordinate_system,
+        "head_confidence": detections.head_confidence,
+        "hair_top": _landmark_to_dict(detections.hair_top),
+        "hair_bottom": _landmark_to_dict(detections.hair_bottom),
+        "hand_lengths": [
+            [_landmark_to_dict(first), _landmark_to_dict(second)]
+            for first, second in detections.hand_lengths
+        ],
+        "handedness": list(detections.handedness),
+        "hand_confidences": list(detections.hand_confidences),
+        "segmentation_mask": _serialise_detection_value(
+            detections.segmentation_mask
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -571,6 +654,7 @@ class DetectorResult:
         return {
             "detector": self.detector,
             "status": self.status.value,
+            "detections": _detections_to_dict(self.detections),
             "diagnostics": list(self.diagnostics),
             "metadata": dict(self.metadata),
         }
@@ -623,6 +707,7 @@ class BodyDetectionResult:
                 for name, result in self.detector_results.items()
             },
             "diagnostics": list(self.diagnostics),
+            "detections": _detections_to_dict(self.detections),
             "keypoints": {
                 name: {
                     "x": landmark.x,
