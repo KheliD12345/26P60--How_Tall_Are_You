@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from .aruco import detect_markers, validate_markers
+import cv2
+
+from .aruco import detect_markers, detect_markers_in_image, validate_markers
+from .camera import undistort_image
 from .geometry import (
     calculate_pairwise_geometry,
     estimate_cm_per_pixel,
@@ -11,15 +14,33 @@ from .height import (
     calculate_perspective_height_cm,
     validate_perspective_result,
 )
-from .models import CalibrationResult, MarkerLayout
+from .models import CalibrationResult, CameraCalibration, MarkerLayout
 from .person import detect_person_endpoints
 
 
 def calibrate_image(
     image_path: str | Path,
     layout: MarkerLayout,
+    camera_calibration: CameraCalibration | None = None,
+    camera_calibration_path: str | Path | None = None,
 ) -> CalibrationResult:
-    markers = detect_markers(image_path, layout)
+    if camera_calibration is not None and camera_calibration_path is not None:
+        raise ValueError(
+            "provide camera_calibration or camera_calibration_path, not both"
+        )
+
+    if camera_calibration is None and camera_calibration_path is None:
+        markers = detect_markers(image_path, layout)
+    else:
+        if camera_calibration_path is not None:
+            camera_calibration = CameraCalibration.from_json(camera_calibration_path)
+        image = cv2.imread(str(image_path))
+        if image is None:
+            raise ValueError(f"could not read image: {image_path}")
+        markers = detect_markers_in_image(
+            undistort_image(image, camera_calibration),
+            layout,
+        )
     validate_markers(markers, layout)
     geometry = calculate_pairwise_geometry(markers, layout)
     cm_per_pixel = estimate_cm_per_pixel(geometry)
