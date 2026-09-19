@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).parents[1]
 def make_layout(path: Path) -> None:
     layout = {
         "dictionary": "DICT_4X4_50",
-        "marker_size_cm": 18,
+        "marker_size_cm": 20,
         "markers": [
             {"id": 0, "name": "bottom_left", "x_cm": 0, "y_cm": 0},
             {"id": 1, "name": "bottom_right", "x_cm": 100, "y_cm": 0},
@@ -67,10 +67,45 @@ def test_module_command_calibrates_image_and_writes_outputs(tmp_path):
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert [marker["id"] for marker in result["markers"]] == [0, 1, 2, 3]
     assert len(result["geometry"]) == 6
-    assert result["scale"]["cm_per_pixel"] == 0.2
+    assert result["scale"]["cm_per_pixel"] == pytest.approx(0.20101)
     assert result["homography"]["reprojection_error_cm"] < 0.0001
     assert overlay_path.exists()
     assert "Wrote calibration overlay" in completed.stdout
+
+
+def test_module_command_accepts_camera_calibration(tmp_path):
+    image_path = tmp_path / "markers.png"
+    layout_path = tmp_path / "layout.json"
+    camera_path = tmp_path / "camera.json"
+    result_path = tmp_path / "calibration.json"
+    make_image(image_path)
+    make_layout(layout_path)
+    camera_path.write_text(
+        json.dumps(
+            {
+                "camera_matrix": [[100, 0, 50], [0, 100, 50], [0, 0, 1]],
+                "distortion_coefficients": [0, 0, 0, 0, 0],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = run_cli(
+        str(image_path),
+        "--layout",
+        str(layout_path),
+        "--camera-calibration",
+        str(camera_path),
+        "--output",
+        str(result_path),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert "camera_calibration" in result
+    assert result["diagnostics"] == [
+        "Camera undistortion applied before marker detection."
+    ]
 
 
 def test_module_command_reports_missing_markers(tmp_path):

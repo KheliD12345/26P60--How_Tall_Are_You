@@ -22,6 +22,16 @@ def detect_markers(
     if image is None:
         raise ValueError(f"could not read image: {image_path}")
 
+    return detect_markers_in_image(image, layout)
+
+
+def detect_markers_in_image(
+    image: np.ndarray,
+    layout: MarkerLayout,
+) -> tuple[DetectedMarker, ...]:
+    if image is None or image.size == 0:
+        raise ValueError("image must contain pixel data")
+
     detector = cv2.aruco.ArucoDetector(
         _get_dictionary(layout.dictionary),
         cv2.aruco.DetectorParameters(),
@@ -29,6 +39,10 @@ def detect_markers(
     corners, ids, _ = detector.detectMarkers(image)
     if ids is None:
         return ()
+
+    detected_ids = [int(marker_id) for marker_id in ids.flatten()]
+    if len(set(detected_ids)) != len(detected_ids):
+        raise ValueError("duplicate ArUco marker IDs were detected")
 
     markers = []
     for marker_corners, marker_id in zip(corners, ids.flatten()):
@@ -51,6 +65,7 @@ def validate_markers(
     markers: tuple[DetectedMarker, ...],
     layout: MarkerLayout,
 ) -> None:
+    layout.validate()
     detected_ids = [marker.id for marker in markers]
     if len(set(detected_ids)) != len(detected_ids):
         raise ValueError("duplicate ArUco marker IDs were detected")
