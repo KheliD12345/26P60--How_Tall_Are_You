@@ -26,6 +26,57 @@ class MarkerPosition:
 
 
 @dataclass(frozen=True)
+class CameraCalibration:
+    camera_matrix: tuple[tuple[float, ...], ...]
+    distortion_coefficients: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.camera_matrix) != 3 or any(
+            len(row) != 3 for row in self.camera_matrix
+        ):
+            raise ValueError("camera matrix must have shape 3x3")
+        if len(self.distortion_coefficients) not in (4, 5, 8, 12, 14):
+            raise ValueError("distortion coefficients have an unsupported shape")
+        values = [value for row in self.camera_matrix for value in row]
+        if not all(isfinite(value) for value in values):
+            raise ValueError("camera calibration values must be finite")
+        if not all(isfinite(value) for value in self.distortion_coefficients):
+            raise ValueError("camera calibration values must be finite")
+        if self.camera_matrix[0][0] <= 0 or self.camera_matrix[1][1] <= 0:
+            raise ValueError("camera focal lengths must be greater than zero")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CameraCalibration":
+        if not isinstance(data, dict):
+            raise ValueError("camera calibration must be a JSON object")
+        try:
+            matrix = tuple(
+                tuple(float(value) for value in row)
+                for row in data["camera_matrix"]
+            )
+            coefficients = tuple(
+                float(value) for value in data["distortion_coefficients"]
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("malformed camera calibration") from error
+        return cls(matrix, coefficients)
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> "CameraCalibration":
+        try:
+            with Path(path).open(encoding="utf-8") as file:
+                return cls.from_dict(json.load(file))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"could not load camera calibration: {path}") from error
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_matrix": [list(row) for row in self.camera_matrix],
+            "distortion_coefficients": list(self.distortion_coefficients),
+        }
+
+
+@dataclass(frozen=True)
 class DetectedMarker:
     id: int
     corners: tuple[tuple[float, float], ...]

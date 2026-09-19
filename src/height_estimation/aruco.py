@@ -22,6 +22,16 @@ def detect_markers(
     if image is None:
         raise ValueError(f"could not read image: {image_path}")
 
+    return detect_markers_in_image(image, layout)
+
+
+def detect_markers_in_image(
+    image: np.ndarray,
+    layout: MarkerLayout,
+) -> tuple[DetectedMarker, ...]:
+    if image is None or image.size == 0:
+        raise ValueError("image must contain pixel data")
+
     detector = cv2.aruco.ArucoDetector(
         _get_dictionary(layout.dictionary),
         cv2.aruco.DetectorParameters(),
