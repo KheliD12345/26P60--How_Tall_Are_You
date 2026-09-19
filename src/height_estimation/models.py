@@ -84,6 +84,22 @@ class DetectedMarker:
     center_y: float
     area_px: float
 
+    def __post_init__(self) -> None:
+        if self.id < 0:
+            raise ValueError("marker IDs must be non-negative")
+        if len(self.corners) != 4 or any(len(point) != 2 for point in self.corners):
+            raise ValueError("detected markers must have four corner points")
+        if not all(
+            isfinite(value)
+            for point in self.corners
+            for value in point
+        ):
+            raise ValueError("marker coordinates must be finite")
+        if not all(isfinite(value) for value in (self.center_x, self.center_y)):
+            raise ValueError("marker centres must be finite")
+        if not isfinite(self.area_px) or self.area_px <= 0:
+            raise ValueError("marker area must be finite and greater than zero")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -103,6 +119,28 @@ class MarkerPairGeometry:
     physical_delta_cm: tuple[float, float]
     pixel_distance: float
     physical_distance_cm: float
+
+    def __post_init__(self) -> None:
+        if self.first_id < 0 or self.second_id < 0:
+            raise ValueError("marker IDs must be non-negative")
+        if self.first_id == self.second_id:
+            raise ValueError("marker geometry requires two distinct IDs")
+        if len(self.pixel_delta) != 2 or len(self.physical_delta_cm) != 2:
+            raise ValueError("marker deltas must contain two values")
+        if not all(
+            isfinite(value)
+            for value in (*self.pixel_delta, *self.physical_delta_cm)
+        ):
+            raise ValueError("marker geometry values must be finite")
+        if not isfinite(self.pixel_distance) or self.pixel_distance <= 0:
+            raise ValueError("pixel distance must be finite and greater than zero")
+        if (
+            not isfinite(self.physical_distance_cm)
+            or self.physical_distance_cm <= 0
+        ):
+            raise ValueError(
+                "physical distance must be finite and greater than zero"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {

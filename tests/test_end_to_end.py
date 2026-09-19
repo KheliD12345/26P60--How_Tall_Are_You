@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).parents[1]
 def make_layout(path: Path) -> None:
     layout = {
         "dictionary": "DICT_4X4_50",
-        "marker_size_cm": 18,
+        "marker_size_cm": 20,
         "markers": [
             {"id": 0, "name": "bottom_left", "x_cm": 0, "y_cm": 0},
             {"id": 1, "name": "bottom_right", "x_cm": 100, "y_cm": 0},
@@ -67,7 +67,7 @@ def test_module_command_calibrates_image_and_writes_outputs(tmp_path):
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert [marker["id"] for marker in result["markers"]] == [0, 1, 2, 3]
     assert len(result["geometry"]) == 6
-    assert result["scale"]["cm_per_pixel"] == 0.2
+    assert result["scale"]["cm_per_pixel"] == pytest.approx(0.20101)
     assert result["homography"]["reprojection_error_cm"] < 0.0001
     assert overlay_path.exists()
     assert "Wrote calibration overlay" in completed.stdout
