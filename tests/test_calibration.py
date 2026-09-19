@@ -12,6 +12,7 @@ from height_estimation.calibration import (
 from height_estimation.models import (
     CalibrationResult,
     CameraCalibration,
+    DetectedMarker,
     HomographyResult,
     MarkerLayout,
     PersonEndpoints,
@@ -22,7 +23,7 @@ def make_layout() -> MarkerLayout:
     return MarkerLayout.from_dict(
         {
             "dictionary": "DICT_4X4_50",
-            "marker_size_cm": 18,
+            "marker_size_cm": 20,
             "markers": [
                 {"id": 0, "name": "bottom_left", "x_cm": 0, "y_cm": 0},
                 {"id": 1, "name": "bottom_right", "x_cm": 100, "y_cm": 0},
@@ -50,9 +51,9 @@ def test_calibrates_image_in_one_result(tmp_path):
 
     assert [marker.id for marker in result.markers] == [0, 1, 2, 3]
     assert len(result.geometry) == 6
-    assert result.cm_per_pixel == 0.2
+    assert result.cm_per_pixel == pytest.approx(0.2010101)
     assert result.homography.reprojection_error_cm < 0.0001
-    assert result.to_dict()["scale"]["pixels_per_cm"] == 5.0
+    assert result.to_dict()["scale"]["pixels_per_cm"] == 4.97
     assert result.person is None
 
 
@@ -74,7 +75,7 @@ def test_calibrates_person_height(tmp_path, monkeypatch):
 
     assert result.person is person
     assert result.to_dict()["person"]["height_px"] == 200.0
-    assert result.to_dict()["person"]["height_cm"] == 40.0
+    assert result.to_dict()["person"]["height_cm"] == 40.2
     assert result.to_dict()["person"]["perspective_height_cm"] == 40.0
 
 
@@ -125,6 +126,58 @@ def test_calibration_result_includes_scene_recovery_metadata(tmp_path):
     ]
 
 
+def test_camera_calibration_detects_person_in_undistorted_frame(
+    tmp_path,
+    monkeypatch,
+):
+    image_path = tmp_path / "markers.png"
+    make_image(image_path)
+    camera_calibration = CameraCalibration(
+        camera_matrix=((100.0, 0.0, 50.0), (0.0, 100.0, 50.0), (0.0, 0.0, 1.0)),
+        distortion_coefficients=(0.1, 0.0, 0.0, 0.0, 0.0),
+    )
+    person = PersonEndpoints(
+        box=(200, 100, 100, 300),
+        top_of_head=(250.0, 100.0),
+        bottom_of_feet=(250.0, 300.0),
+        score=1.5,
+    )
+    seen = {}
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+            center_x=center[0],
+            center_y=center[1],
+            area_px=1.0,
+        )
+        for marker_id, center in enumerate(
+            ((50.0, 350.0), (550.0, 350.0), (50.0, 50.0), (550.0, 50.0))
+        )
+    )
+
+    def detect_person(image):
+        seen["image"] = image
+        return person
+
+    monkeypatch.setattr(
+        "height_estimation.calibration.detect_person_endpoints",
+        detect_person,
+    )
+    monkeypatch.setattr(
+        "height_estimation.calibration.detect_markers_in_image",
+        lambda image, layout: markers,
+    )
+
+    calibrate_image(
+        image_path,
+        make_layout(),
+        camera_calibration=camera_calibration,
+    )
+
+    assert isinstance(seen["image"], np.ndarray)
+
+
 def test_calibration_result_rejects_invalid_scale():
     with pytest.raises(ValueError, match="cm_per_pixel"):
         CalibrationResult(
@@ -136,6 +189,29 @@ def test_calibration_result_rejects_invalid_scale():
                 reprojection_error_cm=0.0,
             ),
         )
+
+
+def test_calibration_result_rejects_non_finite_marker_data():
+    result = {
+        "markers": [
+            {
+                "id": 0,
+                "corners": [[0.0, 0.0]] * 4,
+                "center": [float("nan"), 0.0],
+                "area_px": 1.0,
+            }
+        ],
+        "geometry": [],
+        "scale": {"cm_per_pixel": 0.2},
+        "homography": {
+            "matrix": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            "reprojection_error_cm": 0.0,
+        },
+        "person": None,
+    }
+
+    with pytest.raises(ValueError, match="malformed calibration result"):
+        CalibrationResult.from_dict(result)
 
 
 def test_calibration_result_persists_and_loads(tmp_path):

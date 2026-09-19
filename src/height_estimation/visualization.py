@@ -3,6 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .camera import undistort_image
 from .models import CalibrationResult
 
 
@@ -16,7 +17,11 @@ def write_calibration_overlay(
         raise ValueError(f"could not read image: {image_path}")
 
     marker_by_id = {marker.id: marker for marker in calibration.markers}
-    overlay = image.copy()
+    overlay = (
+        undistort_image(image, calibration.camera_calibration)
+        if calibration.camera_calibration is not None
+        else image.copy()
+    )
     for marker in calibration.markers:
         points = np.array(marker.corners, dtype=np.int32)
         cv2.polylines(overlay, [points], True, (0, 180, 0), 3)

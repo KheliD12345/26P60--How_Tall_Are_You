@@ -63,7 +63,35 @@ def calculate_pairwise_geometry(
     return tuple(measurements)
 
 
-def estimate_cm_per_pixel(geometry: tuple[MarkerPairGeometry, ...]) -> float:
+def _marker_size_cm_per_pixel(
+    markers: tuple[DetectedMarker, ...],
+    marker_size_cm: float,
+) -> float:
+    if not np.isfinite(marker_size_cm) or marker_size_cm <= 0:
+        raise ValueError("marker size must be finite and greater than zero")
+
+    marker_sizes = []
+    for marker in markers:
+        corners = np.asarray(marker.corners, dtype=np.float64)
+        side_lengths = np.linalg.norm(
+            np.roll(corners, -1, axis=0) - corners,
+            axis=1,
+        )
+        if not np.isfinite(side_lengths).all() or np.any(side_lengths <= 0):
+            raise ValueError("marker side lengths must be finite and greater than zero")
+        marker_sizes.append(float(np.mean(side_lengths)))
+
+    if not marker_sizes:
+        raise ValueError("at least one marker is required for marker-size scale")
+    return float(marker_size_cm / np.median(marker_sizes))
+
+
+def estimate_cm_per_pixel(
+    geometry: tuple[MarkerPairGeometry, ...],
+    *,
+    markers: tuple[DetectedMarker, ...] | None = None,
+    marker_size_cm: float | None = None,
+) -> float:
     ratios = [
         pair.physical_distance_cm / pair.pixel_distance
         for pair in geometry
@@ -71,7 +99,13 @@ def estimate_cm_per_pixel(geometry: tuple[MarkerPairGeometry, ...]) -> float:
     ]
     if not ratios or not all(np.isfinite(ratio) and ratio > 0 for ratio in ratios):
         raise ValueError("could not estimate scale from marker geometry")
-    return float(median(ratios))
+    geometry_scale = float(median(ratios))
+    if markers is None and marker_size_cm is None:
+        return geometry_scale
+    if markers is None or marker_size_cm is None:
+        raise ValueError("markers and marker_size_cm must be provided together")
+    marker_scale = _marker_size_cm_per_pixel(markers, marker_size_cm)
+    return float(np.mean((geometry_scale, marker_scale)))
 
 
 def estimate_homography(
