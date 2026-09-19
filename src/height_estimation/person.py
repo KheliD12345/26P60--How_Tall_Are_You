@@ -80,11 +80,14 @@ def refine_person_box(
 
 
 def detect_person_endpoints(
-    image_path: str | Path,
+    image_path: str | Path | np.ndarray,
 ) -> PersonEndpoints | None:
-    image = cv2.imread(str(image_path))
-    if image is None:
-        raise ValueError(f"could not read image: {image_path}")
+    if isinstance(image_path, np.ndarray):
+        image = image_path
+    else:
+        image = cv2.imread(str(image_path))
+        if image is None:
+            raise ValueError(f"could not read image: {image_path}")
 
     detector = cv2.HOGDescriptor()
     detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
