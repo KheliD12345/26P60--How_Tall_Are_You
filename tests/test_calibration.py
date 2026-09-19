@@ -2,9 +2,20 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
-from height_estimation.calibration import calibrate_image
-from height_estimation.models import MarkerLayout, PersonEndpoints
+from height_estimation.calibration import (
+    calibrate_image,
+    load_calibration,
+    save_calibration,
+)
+from height_estimation.models import (
+    CalibrationResult,
+    CameraCalibration,
+    HomographyResult,
+    MarkerLayout,
+    PersonEndpoints,
+)
 
 
 def make_layout() -> MarkerLayout:
@@ -90,3 +101,74 @@ def test_skips_perspective_height_when_validation_fails(tmp_path, monkeypatch):
     assert result.person is person
     assert result.perspective_height_cm is None
     assert "perspective_height_cm" not in result.to_dict()["person"]
+
+
+def test_calibration_result_includes_scene_recovery_metadata(tmp_path):
+    image_path = tmp_path / "markers.png"
+    make_image(image_path)
+    camera_calibration = CameraCalibration(
+        camera_matrix=((100.0, 0.0, 50.0), (0.0, 100.0, 50.0), (0.0, 0.0, 1.0)),
+        distortion_coefficients=(0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+
+    result = calibrate_image(
+        image_path,
+        make_layout(),
+        camera_calibration=camera_calibration,
+    )
+
+    payload = result.to_dict()
+    assert result.camera_calibration is camera_calibration
+    assert payload["camera_calibration"] == camera_calibration.to_dict()
+    assert payload["diagnostics"] == [
+        "Camera undistortion applied before marker detection."
+    ]
+
+
+def test_calibration_result_rejects_invalid_scale():
+    with pytest.raises(ValueError, match="cm_per_pixel"):
+        CalibrationResult(
+            markers=(),
+            geometry=(),
+            cm_per_pixel=0.0,
+            homography=HomographyResult(
+                matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+                reprojection_error_cm=0.0,
+            ),
+        )
+
+
+def test_calibration_result_persists_and_loads(tmp_path):
+    image_path = tmp_path / "markers.png"
+    calibration_path = tmp_path / "nested" / "calibration.json"
+    make_image(image_path)
+
+    result = calibrate_image(image_path, make_layout())
+    save_calibration(result, calibration_path)
+    loaded = load_calibration(calibration_path)
+
+    assert loaded.to_dict() == result.to_dict()
+
+
+def test_calibration_result_persists_person_data(tmp_path, monkeypatch):
+    image_path = tmp_path / "markers.png"
+    calibration_path = tmp_path / "calibration.json"
+    make_image(image_path)
+    person = PersonEndpoints(
+        box=(200, 100, 100, 300),
+        top_of_head=(250.0, 100.0),
+        bottom_of_feet=(250.0, 300.0),
+        score=1.5,
+    )
+    monkeypatch.setattr(
+        "height_estimation.calibration.detect_person_endpoints",
+        lambda image: person,
+    )
+
+    result = calibrate_image(image_path, make_layout())
+    save_calibration(result, calibration_path)
+    loaded = load_calibration(calibration_path)
+
+    assert loaded.person == person
+    assert loaded.perspective_height_cm == result.perspective_height_cm
+    assert loaded.to_dict() == result.to_dict()

@@ -73,6 +73,41 @@ def test_module_command_calibrates_image_and_writes_outputs(tmp_path):
     assert "Wrote calibration overlay" in completed.stdout
 
 
+def test_module_command_accepts_camera_calibration(tmp_path):
+    image_path = tmp_path / "markers.png"
+    layout_path = tmp_path / "layout.json"
+    camera_path = tmp_path / "camera.json"
+    result_path = tmp_path / "calibration.json"
+    make_image(image_path)
+    make_layout(layout_path)
+    camera_path.write_text(
+        json.dumps(
+            {
+                "camera_matrix": [[100, 0, 50], [0, 100, 50], [0, 0, 1]],
+                "distortion_coefficients": [0, 0, 0, 0, 0],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = run_cli(
+        str(image_path),
+        "--layout",
+        str(layout_path),
+        "--camera-calibration",
+        str(camera_path),
+        "--output",
+        str(result_path),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert "camera_calibration" in result
+    assert result["diagnostics"] == [
+        "Camera undistortion applied before marker detection."
+    ]
+
+
 def test_module_command_reports_missing_markers(tmp_path):
     image_path = tmp_path / "plain.png"
     layout_path = tmp_path / "layout.json"

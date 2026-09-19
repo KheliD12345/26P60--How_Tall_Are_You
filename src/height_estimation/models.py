@@ -124,6 +124,14 @@ class HomographyResult:
     matrix: tuple[tuple[float, float, float], ...]
     reprojection_error_cm: float
 
+    def __post_init__(self) -> None:
+        if len(self.matrix) != 3 or any(len(row) != 3 for row in self.matrix):
+            raise ValueError("homography matrix must have shape 3x3")
+        if not all(isfinite(value) for row in self.matrix for value in row):
+            raise ValueError("homography matrix must contain finite values")
+        if not isfinite(self.reprojection_error_cm) or self.reprojection_error_cm < 0:
+            raise ValueError("homography reprojection error must be non-negative")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "matrix": [
@@ -185,6 +193,108 @@ class CalibrationResult:
     homography: HomographyResult
     person: PersonEndpoints | None = None
     perspective_height_cm: float | None = None
+    camera_calibration: CameraCalibration | None = None
+    diagnostics: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.cm_per_pixel) or self.cm_per_pixel <= 0:
+            raise ValueError("cm_per_pixel must be finite and greater than zero")
+        if not all(isinstance(item, str) and item for item in self.diagnostics):
+            raise ValueError("calibration diagnostics must be non-empty strings")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CalibrationResult":
+        if not isinstance(data, dict):
+            raise ValueError("calibration result must be a JSON object")
+        try:
+            markers = tuple(
+                DetectedMarker(
+                    id=int(marker["id"]),
+                    corners=tuple(
+                        (float(point[0]), float(point[1]))
+                        for point in marker["corners"]
+                    ),
+                    center_x=float(marker["center"][0]),
+                    center_y=float(marker["center"][1]),
+                    area_px=float(marker["area_px"]),
+                )
+                for marker in data["markers"]
+            )
+            geometry = tuple(
+                MarkerPairGeometry(
+                    first_id=int(pair["first_id"]),
+                    second_id=int(pair["second_id"]),
+                    pixel_delta=tuple(float(value) for value in pair["pixel_delta"]),
+                    physical_delta_cm=tuple(
+                        float(value) for value in pair["physical_delta_cm"]
+                    ),
+                    pixel_distance=float(pair["pixel_distance"]),
+                    physical_distance_cm=float(pair["physical_distance_cm"]),
+                )
+                for pair in data["geometry"]
+            )
+            scale = data["scale"]
+            homography_data = data["homography"]
+            homography = HomographyResult(
+                matrix=tuple(
+                    tuple(float(value) for value in row)
+                    for row in homography_data["matrix"]
+                ),
+                reprojection_error_cm=float(
+                    homography_data["reprojection_error_cm"]
+                ),
+            )
+            person_data = data.get("person")
+            person = None
+            perspective_height_cm = None
+            if person_data is not None:
+                person = PersonEndpoints(
+                    box=tuple(int(value) for value in person_data["box"]),
+                    top_of_head=tuple(
+                        float(value) for value in person_data["top_of_head"]
+                    ),
+                    bottom_of_feet=tuple(
+                        float(value) for value in person_data["bottom_of_feet"]
+                    ),
+                    score=float(person_data["score"]),
+                )
+                if "perspective_height_cm" in person_data:
+                    perspective_height_cm = float(
+                        person_data["perspective_height_cm"]
+                    )
+            camera_data = data.get("camera_calibration")
+            return cls(
+                markers=markers,
+                geometry=geometry,
+                cm_per_pixel=float(scale["cm_per_pixel"]),
+                homography=homography,
+                person=person,
+                perspective_height_cm=perspective_height_cm,
+                camera_calibration=(
+                    None
+                    if camera_data is None
+                    else CameraCalibration.from_dict(camera_data)
+                ),
+                diagnostics=tuple(data.get("diagnostics", ())),
+            )
+        except (KeyError, TypeError, ValueError, IndexError) as error:
+            raise ValueError("malformed calibration result") from error
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> "CalibrationResult":
+        try:
+            with Path(path).open(encoding="utf-8") as file:
+                return cls.from_dict(json.load(file))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"could not load calibration result: {path}") from error
+
+    def to_json(self, path: str | Path) -> None:
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(self.to_dict(), indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def to_dict(self) -> dict[str, Any]:
         person = None
@@ -200,7 +310,7 @@ class CalibrationResult:
                     2,
                 )
 
-        return {
+        result = {
             "markers": [marker.to_dict() for marker in self.markers],
             "geometry": [pair.to_dict() for pair in self.geometry],
             "scale": {
@@ -210,6 +320,11 @@ class CalibrationResult:
             "homography": self.homography.to_dict(),
             "person": person,
         }
+        if self.camera_calibration is not None:
+            result["camera_calibration"] = self.camera_calibration.to_dict()
+        if self.diagnostics:
+            result["diagnostics"] = list(self.diagnostics)
+        return result
 
 
 @dataclass(frozen=True)

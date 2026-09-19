@@ -26,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("image", nargs="?", type=Path)
     parser.add_argument("--output", type=Path, help="path for detection JSON")
     parser.add_argument("--overlay", type=Path, help="path for calibration overlay")
+    parser.add_argument(
+        "--camera-calibration",
+        type=Path,
+        help="optional camera calibration JSON for undistortion",
+    )
     return parser
 
 
@@ -34,7 +39,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     layout = MarkerLayout.from_json(args.layout)
     if args.image is not None:
         try:
-            calibration = calibrate_image(args.image, layout)
+            if args.camera_calibration is None:
+                calibration = calibrate_image(args.image, layout)
+            else:
+                calibration = calibrate_image(
+                    args.image,
+                    layout,
+                    camera_calibration_path=args.camera_calibration,
+                )
             if args.overlay is not None:
                 write_calibration_overlay(args.image, calibration, args.overlay)
         except ValueError as error:
