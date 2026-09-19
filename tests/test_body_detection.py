@@ -1,9 +1,11 @@
+import cv2
 import numpy as np
 import pytest
 
 from height_estimation.advanced_models import BodyDetections, Landmark
 from height_estimation.body_detection import (
     BodyDetectionResult,
+    BodyDetectionOrchestrator,
     DetectionStatus,
     HandDetectorAdapter,
     HeadDetectorAdapter,
@@ -20,6 +22,7 @@ from height_estimation.body_detection import (
     normalise_segmentation,
 )
 from height_estimation.models import PersonEndpoints
+from height_estimation.quality import AcquisitionQualityGate
 
 
 def test_pose_keypoints_preserve_normalised_coordinates_and_visibility():
@@ -226,6 +229,167 @@ def test_hand_detector_adapter_reports_hand_count():
 
     assert result.status == DetectionStatus.SUCCESS
     assert result.metadata["hand_count"] == 1
+
+
+def test_orchestrator_merges_stubbed_detectors_and_keeps_optional_statuses():
+    orchestrator = BodyDetectionOrchestrator(
+        pose_detector=lambda image: {
+            "coordinate_system": "normalized",
+            "keypoints": {
+                "left_hip": (0.4, 0.5, 0.9),
+                "left_ankle": (0.4, 0.9, 0.8),
+            },
+        },
+        head_detector=lambda image: {
+            "head_bbox": {"x1": 0.3, "y1": 0.1, "x2": 0.5, "y2": 0.2},
+            "confidence": 0.9,
+        },
+        use_person_fallback=False,
+    )
+
+    result = orchestrator.detect(np.zeros((40, 30, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.PARTIAL
+    assert result.success is True
+    assert result.detections.keypoints["left_hip"].visibility == 0.9
+    assert result.detections.head_bbox == (0.3, 0.1, 0.5, 0.2)
+    assert result.detector_results["segmentation"].status == DetectionStatus.UNAVAILABLE
+    assert result.detector_results["hands"].status == DetectionStatus.UNAVAILABLE
+
+
+def test_orchestrator_accepts_image_paths(tmp_path):
+    image_path = tmp_path / "input.png"
+    image = np.zeros((20, 30, 3), dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+
+    orchestrator = BodyDetectionOrchestrator(
+        pose_detector=lambda image: {
+            "keypoints": {"left_hip": (0.5, 0.5)},
+        },
+        use_person_fallback=False,
+    )
+
+    result = orchestrator.detect(image_path)
+
+    assert result.success is True
+    assert result.detections.keypoints["left_hip"] == Landmark(0.5, 0.5)
+
+
+def test_orchestrator_reports_unreadable_and_empty_inputs(tmp_path):
+    orchestrator = BodyDetectionOrchestrator(use_person_fallback=False)
+
+    unreadable = orchestrator.detect(tmp_path / "missing.png")
+    empty = orchestrator.detect(np.empty((0, 0, 3), dtype=np.uint8))
+
+    assert unreadable.status == DetectionStatus.FAILED
+    assert unreadable.detector_results["input"].status == DetectionStatus.FAILED
+    assert empty.status == DetectionStatus.FAILED
+
+
+def test_orchestrator_keeps_no_person_distinct_from_unavailable_detectors():
+    orchestrator = BodyDetectionOrchestrator(
+        pose_detector=lambda image: {},
+        use_person_fallback=False,
+    )
+
+    result = orchestrator.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.detector_results["pose"].status == DetectionStatus.NO_PERSON
+    assert result.detector_results["head"].status == DetectionStatus.UNAVAILABLE
+    assert result.status == DetectionStatus.UNAVAILABLE
+
+
+def test_orchestrator_reports_no_person_when_all_configured_detectors_find_none():
+    no_detection = lambda image: {}
+    orchestrator = BodyDetectionOrchestrator(
+        pose_detector=no_detection,
+        head_detector=no_detection,
+        segmentation_detector=no_detection,
+        hand_detector=no_detection,
+        use_person_fallback=False,
+    )
+
+    result = orchestrator.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.success is False
+
+
+def test_merged_detections_feed_acquisition_quality_gate():
+    orchestrator = BodyDetectionOrchestrator(
+        pose_detector=lambda image: {
+            "keypoints": {
+                "left_hip": (0.4, 0.4, 0.9),
+                "left_knee": (0.4, 0.6, 0.9),
+                "left_ankle": (0.4, 0.9, 0.9),
+            }
+        },
+        segmentation_detector=lambda image: {
+            "mask": np.ones((20, 20), dtype=np.uint8),
+        },
+        use_person_fallback=False,
+    )
+
+    result = orchestrator.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+    assessment = AcquisitionQualityGate().evaluate(
+        np.zeros((20, 20, 3), dtype=np.uint8),
+        detected_markers=4,
+        keypoints=result.detections.keypoints,
+        segmentation_mask=result.detections.segmentation_mask,
+        body_bbox=(0, 0, 20, 20),
+    )
+
+    assert result.success is True
+    assert 0.0 <= assessment.overall_score <= 1.0
+
+
+def test_orchestrator_isolates_detector_failures():
+    def broken_detector(image):
+        raise RuntimeError("stub failed")
+
+    orchestrator = BodyDetectionOrchestrator(
+        pose_detector=broken_detector,
+        head_detector=lambda image: {
+            "head_bbox_pixels": (1, 2, 8, 12),
+        },
+        use_person_fallback=False,
+    )
+
+    result = orchestrator.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.PARTIAL
+    assert result.detector_results["pose"].status == DetectionStatus.FAILED
+    assert "stub failed" in result.detector_results["pose"].diagnostics[0]
+    assert result.detections.head_bbox == (1.0, 2.0, 8.0, 12.0)
+
+
+def test_orchestrator_preserves_segmentation_and_hand_results():
+    mask = np.ones((10, 8), dtype=np.uint8)
+    orchestrator = BodyDetectionOrchestrator(
+        segmentation_detector=lambda image: {
+            "mask": mask,
+            "hair_top": 0.1,
+            "hair_bottom": 0.8,
+        },
+        hand_detector=lambda image: {
+            "hands": [
+                {
+                    "handedness": "right",
+                    "confidence": 0.7,
+                    "hand_length": ((0.2, 0.7), (0.2, 0.6)),
+                }
+            ]
+        },
+        use_person_fallback=False,
+    )
+
+    result = orchestrator.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.PARTIAL
+    assert np.array_equal(result.detections.segmentation_mask, mask)
+    assert result.detections.hair_bottom.y == pytest.approx(0.8)
+    assert result.detections.handedness == ("right",)
+    assert result.detections.hand_confidences == (0.7,)
 
 
 def test_person_fallback_keeps_endpoints_and_bounds_confidence():
