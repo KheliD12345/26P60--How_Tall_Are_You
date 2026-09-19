@@ -66,4 +66,18 @@ def calibrate_image(
         homography=homography,
         person=person,
         perspective_height_cm=perspective_height_cm,
+        camera_calibration=camera_calibration,
+        diagnostics=(
+            "Camera undistortion applied before marker detection."
+            if camera_calibration is not None
+            else "Camera calibration was not supplied."
+        ,),
     )
+
+
+def save_calibration(result: CalibrationResult, path: str | Path) -> None:
+    result.to_json(path)
+
+
+def load_calibration(path: str | Path) -> CalibrationResult:
+    return CalibrationResult.from_json(path)
