@@ -30,6 +30,10 @@ def detect_markers(
     if ids is None:
         return ()
 
+    detected_ids = [int(marker_id) for marker_id in ids.flatten()]
+    if len(set(detected_ids)) != len(detected_ids):
+        raise ValueError("duplicate ArUco marker IDs were detected")
+
     markers = []
     for marker_corners, marker_id in zip(corners, ids.flatten()):
         points = np.asarray(marker_corners, dtype=np.float32).reshape(4, 2)
@@ -51,6 +55,7 @@ def validate_markers(
     markers: tuple[DetectedMarker, ...],
     layout: MarkerLayout,
 ) -> None:
+    layout.validate()
     detected_ids = [marker.id for marker in markers]
     if len(set(detected_ids)) != len(detected_ids):
         raise ValueError("duplicate ArUco marker IDs were detected")
