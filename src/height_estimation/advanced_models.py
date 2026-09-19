@@ -200,6 +200,8 @@ class BodyDetections:
     hair_top: LandmarkValue | None = None
     hair_bottom: LandmarkValue | None = None
     hand_lengths: tuple[tuple[LandmarkValue, LandmarkValue], ...] = ()
+    handedness: tuple[str, ...] = ()
+    hand_confidences: tuple[float, ...] = ()
     segmentation_mask: Any | None = None
     head_bbox_coordinate_system: str = "pixel"
 
@@ -233,6 +235,20 @@ class BodyDetections:
             )
             for first, second in self.hand_lengths
         )
+        self.handedness = tuple(str(label).lower() for label in self.handedness)
+        if any(label not in {"left", "right", "unknown"} for label in self.handedness):
+            raise ValueError("handedness must be left, right, or unknown")
+        if self.handedness and len(self.handedness) != len(self.hand_lengths):
+            raise ValueError("handedness must align with hand lengths")
+        self.hand_confidences = tuple(
+            _bounded_score(value, "hand confidence")
+            for value in self.hand_confidences
+        )
+        if (
+            self.hand_confidences
+            and len(self.hand_confidences) != len(self.hand_lengths)
+        ):
+            raise ValueError("hand confidences must align with hand lengths")
         if self.head_bbox_coordinate_system not in {"normalized", "pixel"}:
             raise ValueError(
                 "head_bbox coordinate system must be normalized or pixel"

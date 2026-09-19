@@ -5,15 +5,19 @@ from height_estimation.advanced_models import BodyDetections, Landmark
 from height_estimation.body_detection import (
     BodyDetectionResult,
     DetectionStatus,
+    HandDetectorAdapter,
     HeadDetectorAdapter,
     PersonFallbackAdapter,
     PoseDetectorAdapter,
+    SegmentationDetectorAdapter,
     UnavailableDetector,
     body_detections_from_person,
     build_body_detection_result,
     merge_body_detections,
     normalise_head_detection,
+    normalise_hand_detection,
     normalise_pose_keypoints,
+    normalise_segmentation,
 )
 from height_estimation.models import PersonEndpoints
 
@@ -98,6 +102,132 @@ def test_head_detection_preserves_normalised_bbox_coordinates():
     assert detections.head_bottom.y == pytest.approx(0.3)
 
 
+def test_segmentation_preserves_mask_shape_values_and_hair_endpoints():
+    mask = np.zeros((10, 8), dtype=np.uint8)
+    mask[2:7, 3:5] = 1
+
+    detections = normalise_segmentation(
+        {
+            "mask": mask,
+            "mask_coordinate_system": "pixel",
+            "hair_length": {
+                "top": {"y": 0.2},
+                "bottom": {"y": 0.6},
+            },
+        }
+    )
+
+    assert np.array_equal(detections.segmentation_mask, mask)
+    assert detections.segmentation_mask.shape == (10, 8)
+    assert detections.hair_top.y == pytest.approx(0.2)
+    assert detections.hair_bottom.y == pytest.approx(0.6)
+    assert detections.hair_top.coordinate_system == "normalized"
+
+
+def test_segmentation_can_extract_endpoint_x_from_mask():
+    mask = np.zeros((10, 8), dtype=np.uint8)
+    mask[2, 2:6] = 1
+    mask[7, 1:5] = 1
+
+    detections = normalise_segmentation(
+        {
+            "mask": mask,
+            "hair_top": 0.2,
+            "hair_bottom": 0.7,
+        }
+    )
+
+    assert detections.hair_top.x == pytest.approx(0.5)
+    assert detections.hair_bottom.x == pytest.approx(2.5 / 7.0)
+
+
+def test_segmentation_adapter_reports_mask_metadata():
+    result = SegmentationDetectorAdapter(
+        lambda image: {
+            "mask": np.ones((12, 9), dtype=np.uint8),
+            "mask_coordinate_system": "pixel",
+        }
+    ).detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.SUCCESS
+    assert result.metadata["mask_shape"] == (12, 9)
+    assert result.metadata["mask_coordinate_system"] == "pixel"
+
+
+def test_segmentation_rejects_non_numeric_masks():
+    with pytest.raises(ValueError, match="numeric"):
+        normalise_segmentation({"mask": [["hair"]]})
+
+
+def test_hand_detection_normalises_subject_relative_wrist_to_middle_tip_pairs():
+    detections = normalise_hand_detection(
+        {
+            "coordinate_system": "normalized",
+            "hands": [
+                {
+                    "handedness": "Left",
+                    "confidence": 0.85,
+                    "hand_length": {
+                        "landmark_0": {"x": 0.2, "y": 0.6},
+                        "landmark_12": {"x": 0.25, "y": 0.5},
+                    },
+                }
+            ],
+        }
+    )
+
+    assert detections.handedness == ("left",)
+    assert detections.hand_confidences == (0.85,)
+    assert detections.hand_lengths[0][0] == Landmark(0.2, 0.6)
+    assert detections.hand_lengths[0][1].to_pixel(200, 400) == (50.0, 200.0)
+
+
+def test_hand_detection_accepts_all_landmarks_fallback():
+    detections = normalise_hand_detection(
+        {
+            "hands": [
+                {
+                    "label": "right",
+                    "all_landmarks": {
+                        "landmark_0": {"x": 10, "y": 20},
+                        "landmark_12": {"x": 12, "y": 5},
+                    },
+                }
+            ],
+            "normalized": False,
+        }
+    )
+
+    assert detections.handedness == ("right",)
+    assert detections.hand_lengths[0][0].coordinate_system == "pixel"
+
+
+def test_hand_detection_rejects_image_perspective_labels():
+    with pytest.raises(ValueError, match="image-perspective"):
+        normalise_hand_detection(
+            {
+                "handedness_convention": "image",
+                "hands": [],
+            }
+        )
+
+
+def test_hand_detector_adapter_reports_hand_count():
+    result = HandDetectorAdapter(
+        lambda image: {
+            "hands": [
+                {
+                    "handedness": "unknown",
+                    "hand_length": ((0.1, 0.5), (0.1, 0.4)),
+                }
+            ]
+        }
+    ).detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.SUCCESS
+    assert result.metadata["hand_count"] == 1
+
+
 def test_person_fallback_keeps_endpoints_and_bounds_confidence():
     person = PersonEndpoints(
         box=(10, 20, 80, 180),
@@ -173,6 +303,21 @@ def test_merge_does_not_replace_valid_values_with_empty_fallback():
 
     assert merged.keypoints["left_hip"] == valid.keypoints["left_hip"]
     assert merged.head_top == valid.head_top
+
+
+def test_merge_keeps_hand_metadata_aligned_with_selected_pairs():
+    primary = BodyDetections(hand_lengths=(((0.1, 0.5), (0.1, 0.4)),))
+    secondary = BodyDetections(
+        hand_lengths=(((0.2, 0.5), (0.2, 0.4)),),
+        handedness=("left",),
+        hand_confidences=(0.8,),
+    )
+
+    merged = merge_body_detections(primary, secondary)
+
+    assert merged.hand_lengths == primary.hand_lengths
+    assert merged.handedness == ()
+    assert merged.hand_confidences == ()
 
 
 def test_merge_rejects_coordinate_system_mismatch():
