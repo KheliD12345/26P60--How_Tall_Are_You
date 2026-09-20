@@ -339,3 +339,46 @@ class AnthropometricHeightEstimator:
                 "aggregation": "median",
             },
         )
+
+
+def estimate_independent_heights(
+    detections: BodyDetections,
+    *,
+    cm_per_pixel: float | None = None,
+    image_size: tuple[int, int] | None = None,
+    metric_endpoints: tuple[
+        tuple[float, float], tuple[float, float]
+    ] | None = None,
+    quality: QualityAssessment | QualityMetrics | None = None,
+) -> tuple[HeightEstimate, ...]:
+    """Run available independent estimators without fusing their outputs."""
+    estimates: list[HeightEstimate] = []
+    geometric = GeometricHeightEstimator().estimate(
+        detections,
+        cm_per_pixel=cm_per_pixel,
+        image_size=image_size,
+        metric_endpoints=metric_endpoints,
+        quality=quality,
+    )
+    if geometric is not None:
+        estimates.append(geometric)
+
+    head_bbox = HeadBoundingBoxHeightEstimator().estimate(
+        detections,
+        cm_per_pixel=cm_per_pixel,
+        image_size=image_size,
+        quality=quality,
+    )
+    if head_bbox is not None:
+        estimates.append(head_bbox)
+
+    anthropometric = AnthropometricHeightEstimator().estimate(
+        detections,
+        cm_per_pixel=cm_per_pixel,
+        image_size=image_size,
+        quality=quality,
+    )
+    if anthropometric is not None:
+        estimates.append(anthropometric)
+
+    return tuple(estimates)
