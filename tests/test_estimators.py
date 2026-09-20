@@ -57,7 +57,7 @@ def test_geometric_estimator_falls_back_from_heels_to_ankles():
 
     estimate = GeometricHeightEstimator().estimate(
         detections,
-        cm_per_pixel=200.0,
+        cm_per_pixel=2.0,
         image_size=(100, 100),
     )
 
