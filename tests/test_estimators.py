@@ -50,6 +50,28 @@ def test_geometric_estimator_uses_head_and_heel_pixels():
     assert estimate.metadata["coordinate_system"] == "pixel"
 
 
+def test_estimators_accept_quality_metrics_directly():
+    detections = BodyDetections(
+        head_top=Landmark(100.0, 20.0, normalized=False),
+        keypoints={"left_heel": Landmark(101.0, 220.0, normalized=False)},
+    )
+    quality = QualityMetrics(
+        marker_visibility=0.0,
+        blur_score=1.0,
+        occlusion_score=1.0,
+        model_agreement=1.0,
+    )
+
+    estimate = GeometricHeightEstimator().estimate(
+        detections,
+        cm_per_pixel=0.8,
+        quality=quality,
+    )
+
+    assert estimate is not None
+    assert estimate.confidence == pytest.approx(0.8)
+
+
 def test_geometric_estimator_falls_back_from_heels_to_ankles():
     detections = BodyDetections(
         head_top=Landmark(0.5, 0.1),
@@ -191,6 +213,21 @@ def test_anthropometric_estimator_uses_available_arm_segment():
     assert estimate is not None
     assert estimate.height_cm == pytest.approx(100.0)
     assert estimate.metadata["measurements_used"] == ["left_arm"]
+
+
+def test_anthropometric_estimator_rejects_mixed_coordinate_segments():
+    detections = BodyDetections(
+        keypoints={
+            "left_shoulder": Landmark(0.2, 0.2),
+            "left_wrist": Landmark(20.0, 60.0, normalized=False),
+        }
+    )
+
+    assert AnthropometricHeightEstimator().estimate(
+        detections,
+        cm_per_pixel=1.0,
+        image_size=(100, 100),
+    ) is None
 
 
 def test_anthropometric_estimator_returns_none_without_segments():

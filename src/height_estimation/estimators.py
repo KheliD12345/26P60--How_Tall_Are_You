@@ -17,7 +17,9 @@ def _quality_score(
 ) -> float:
     if quality is None:
         return 0.5
-    return quality.overall_score
+    if isinstance(quality, QualityAssessment):
+        return quality.overall_score
+    return quality.overall_score()
 
 
 def _pixel_point(
@@ -246,7 +248,9 @@ class AnthropometricHeightEstimator:
 
         measurements: list[tuple[str, float, float]] = []
 
-        def point(name: str) -> tuple[float, float, float] | None:
+        def point(
+            name: str,
+        ) -> tuple[float, float, float, str] | None:
             value = landmarks.get(name)
             if value is None:
                 return None
@@ -255,7 +259,7 @@ class AnthropometricHeightEstimator:
                 x, y = _pixel_point(landmark, image_size)
             except ValueError:
                 return None
-            return x, y, landmark.visibility
+            return x, y, landmark.visibility, landmark.coordinate_system
 
         def segment(
             label: str,
@@ -266,6 +270,8 @@ class AnthropometricHeightEstimator:
             first = point(first_name)
             second = point(second_name)
             if first is None or second is None:
+                return
+            if first[3] != second[3]:
                 return
             length_px = hypot(second[0] - first[0], second[1] - first[1])
             if not isfinite(length_px) or length_px <= 0:
