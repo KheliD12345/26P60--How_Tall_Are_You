@@ -14,6 +14,7 @@ from height_estimation.estimators import (
     AnthropometricHeightEstimator,
     GeometricHeightEstimator,
     HeadBoundingBoxHeightEstimator,
+    estimate_independent_heights,
 )
 
 
@@ -197,6 +198,37 @@ def test_anthropometric_estimator_returns_none_without_segments():
         BodyDetections(),
         cm_per_pixel=1.0,
     ) is None
+
+
+def test_independent_integration_returns_available_methods_without_fusion():
+    estimates = estimate_independent_heights(
+        BodyDetections(
+            head_top=Landmark(0.5, 0.1),
+            head_bottom=Landmark(0.5, 0.23),
+            head_bbox=(0.4, 0.1, 0.6, 0.3),
+            head_confidence=0.9,
+            keypoints={"left_heel": Landmark(0.5, 0.9)},
+        ),
+        cm_per_pixel=1.0,
+        image_size=(100, 100),
+    )
+
+    assert [estimate.method for estimate in estimates] == [
+        MeasurementMethod.GEOMETRIC,
+        MeasurementMethod.HEAD_BBOX,
+        MeasurementMethod.ANTHROPOMETRIC,
+    ]
+    assert all(estimate.method is not MeasurementMethod.FUSION for estimate in estimates)
+    assert all(estimate.method is not MeasurementMethod.SMPL_BASED for estimate in estimates)
+
+
+def test_independent_integration_preserves_unavailable_methods():
+    estimates = estimate_independent_heights(
+        BodyDetections(),
+        cm_per_pixel=1.0,
+    )
+
+    assert estimates == ()
 
 
 @pytest.mark.parametrize(
