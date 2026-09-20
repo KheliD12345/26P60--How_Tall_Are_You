@@ -124,6 +124,28 @@ def test_head_bbox_estimator_prefers_explicit_head_landmarks():
     assert estimate.metadata["approximation"] is False
 
 
+def test_head_bbox_confidence_tracks_head_detection_confidence():
+    estimator = HeadBoundingBoxHeightEstimator()
+    high_confidence = estimator.estimate(
+        BodyDetections(
+            head_bbox=(40.0, 20.0, 80.0, 70.0),
+            head_confidence=0.9,
+        ),
+        cm_per_pixel=1.0,
+    )
+    low_confidence = estimator.estimate(
+        BodyDetections(
+            head_bbox=(40.0, 20.0, 80.0, 70.0),
+            head_confidence=0.3,
+        ),
+        cm_per_pixel=1.0,
+    )
+
+    assert high_confidence is not None
+    assert low_confidence is not None
+    assert high_confidence.confidence > low_confidence.confidence
+
+
 def test_head_bbox_estimator_returns_none_without_valid_bbox_or_landmarks():
     assert HeadBoundingBoxHeightEstimator().estimate(
         BodyDetections(head_confidence=0.9),
