@@ -128,10 +128,91 @@ class GeometricHeightEstimator:
 
 
 class HeadBoundingBoxHeightEstimator:
-    """Placeholder until the independent head-box estimator is implemented."""
+    """Estimate head height from explicit endpoints or a head bounding box."""
 
-    def estimate(self, detections: BodyDetections, **kwargs: Any) -> None:
-        return None
+    def estimate(
+        self,
+        detections: BodyDetections,
+        *,
+        cm_per_pixel: float | None = None,
+        image_size: tuple[int, int] | None = None,
+        quality: QualityAssessment | QualityMetrics | None = None,
+    ) -> HeightEstimate | None:
+        if cm_per_pixel is None or not isfinite(cm_per_pixel) or cm_per_pixel <= 0:
+            return None
+
+        top = detections.head_top
+        bottom = detections.head_bottom
+        approximation = True
+        source = "head_bbox"
+        coordinate_system = detections.head_bbox_coordinate_system
+
+        if top is not None and bottom is not None:
+            top_landmark = Landmark.from_value(top)
+            bottom_landmark = Landmark.from_value(bottom)
+            if top_landmark.coordinate_system != bottom_landmark.coordinate_system:
+                return None
+            coordinate_system = top_landmark.coordinate_system
+            try:
+                top_point = _pixel_point(top_landmark, image_size)
+                bottom_point = _pixel_point(bottom_landmark, image_size)
+            except ValueError:
+                return None
+            approximation = False
+            source = "head_landmarks"
+            completeness = 1.0
+            visibility = min(top_landmark.visibility, bottom_landmark.visibility)
+        elif detections.head_bbox is not None:
+            bbox = detections.head_bbox
+            if len(bbox) != 4 or not all(isfinite(value) for value in bbox):
+                return None
+            x1, y1, x2, y2 = bbox
+            if x2 <= x1 or y2 <= y1:
+                return None
+            try:
+                top_point = _pixel_point(
+                    Landmark((x1 + x2) / 2.0, y1, coordinate_system=coordinate_system),
+                    image_size,
+                )
+                bottom_point = _pixel_point(
+                    Landmark((x1 + x2) / 2.0, y2, coordinate_system=coordinate_system),
+                    image_size,
+                )
+            except ValueError:
+                return None
+            completeness = 0.75
+            visibility = detections.head_confidence
+        else:
+            return None
+
+        height_cm = _positive_height(
+            abs(bottom_point[1] - top_point[1]) * cm_per_pixel
+        )
+        if height_cm is None:
+            return None
+
+        confidence = min(
+            1.0,
+            visibility * completeness * _quality_score(quality),
+        )
+        return HeightEstimate(
+            method=MeasurementMethod.HEAD_BBOX,
+            height_cm=height_cm,
+            confidence=confidence,
+            notes=(
+                "Head height from explicit landmarks."
+                if not approximation
+                else "Head height approximated from the bounding-box extent."
+            ),
+            metadata={
+                "coordinate_system": coordinate_system,
+                "source": source,
+                "cm_per_pixel": cm_per_pixel,
+                "approximation": approximation,
+                "head_confidence": detections.head_confidence,
+                "completeness": completeness,
+            },
+        )
 
 
 class AnthropometricHeightEstimator:
