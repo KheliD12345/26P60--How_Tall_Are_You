@@ -161,7 +161,7 @@ def test_anthropometric_estimator_uses_head_ratio():
 
     estimate = AnthropometricHeightEstimator().estimate(
         detections,
-        cm_per_pixel=1000.0,
+        cm_per_pixel=1.0,
         image_size=(100, 100),
         quality=high_quality(),
     )
@@ -183,7 +183,7 @@ def test_anthropometric_estimator_uses_available_arm_segment():
 
     estimate = AnthropometricHeightEstimator().estimate(
         detections,
-        cm_per_pixel=1000.0,
+        cm_per_pixel=1.0,
         image_size=(100, 100),
     )
 

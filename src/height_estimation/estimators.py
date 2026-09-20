@@ -1,4 +1,5 @@
-from math import isfinite
+from math import hypot, isfinite
+from statistics import median
 from typing import Any
 
 from .advanced_models import (
@@ -216,7 +217,125 @@ class HeadBoundingBoxHeightEstimator:
 
 
 class AnthropometricHeightEstimator:
-    """Placeholder until the independent anthropometric estimator is implemented."""
+    """Estimate stature from valid body segments and population ratios."""
 
-    def estimate(self, detections: BodyDetections, **kwargs: Any) -> None:
-        return None
+    BODY_RATIOS = {
+        "head": 0.13,
+        "torso": 0.30,
+        "upper_leg": 0.23,
+        "lower_leg": 0.25,
+        "arm": 0.46,
+    }
+
+    def estimate(
+        self,
+        detections: BodyDetections,
+        *,
+        cm_per_pixel: float | None = None,
+        image_size: tuple[int, int] | None = None,
+        quality: QualityAssessment | QualityMetrics | None = None,
+    ) -> HeightEstimate | None:
+        if cm_per_pixel is None or not isfinite(cm_per_pixel) or cm_per_pixel <= 0:
+            return None
+
+        landmarks = dict(detections.keypoints)
+        if detections.head_top is not None:
+            landmarks["head_top"] = detections.head_top
+        if detections.head_bottom is not None:
+            landmarks["head_bottom"] = detections.head_bottom
+
+        measurements: list[tuple[str, float, float]] = []
+
+        def point(name: str) -> tuple[float, float, float] | None:
+            value = landmarks.get(name)
+            if value is None:
+                return None
+            landmark = Landmark.from_value(value)
+            try:
+                x, y = _pixel_point(landmark, image_size)
+            except ValueError:
+                return None
+            return x, y, landmark.visibility
+
+        def segment(
+            label: str,
+            first_name: str,
+            second_name: str,
+            ratio_name: str,
+        ) -> None:
+            first = point(first_name)
+            second = point(second_name)
+            if first is None or second is None:
+                return
+            length_px = hypot(second[0] - first[0], second[1] - first[1])
+            if not isfinite(length_px) or length_px <= 0:
+                return
+            length_cm = length_px * cm_per_pixel
+            height_cm = _positive_height(length_cm / self.BODY_RATIOS[ratio_name])
+            if height_cm is not None:
+                measurements.append(
+                    (label, height_cm, min(first[2], second[2]))
+                )
+
+        segment("head", "head_top", "head_bottom", "head")
+        for side in ("left", "right"):
+            segment(
+                f"{side}_arm",
+                f"{side}_shoulder",
+                f"{side}_wrist",
+                "arm",
+            )
+            segment(
+                f"{side}_upper_leg",
+                f"{side}_hip",
+                f"{side}_knee",
+                "upper_leg",
+            )
+            segment(
+                f"{side}_lower_leg",
+                f"{side}_knee",
+                f"{side}_ankle",
+                "lower_leg",
+            )
+
+        if not measurements:
+            return None
+
+        height_cm = float(median(item[1] for item in measurements))
+        evidence_visibility = float(
+            median(item[2] for item in measurements)
+        )
+        confidence = min(
+            1.0,
+            0.6 * evidence_visibility * _quality_score(quality),
+        )
+        return HeightEstimate(
+            method=MeasurementMethod.ANTHROPOMETRIC,
+            height_cm=height_cm,
+            confidence=confidence,
+            notes=(
+                "Indirect stature estimate from body proportions; "
+                "not an image-fitted 3D model."
+            ),
+            metadata={
+                "measurements_used": [item[0] for item in measurements],
+                "segment_heights_cm": {
+                    item[0]: item[1] for item in measurements
+                },
+                "ratios": {
+                    item[0]: self.BODY_RATIOS[
+                        "head"
+                        if item[0] == "head"
+                        else "arm"
+                        if item[0].endswith("_arm")
+                        else "upper_leg"
+                        if item[0].endswith("_upper_leg")
+                        else "lower_leg"
+                    ]
+                    for item in measurements
+                },
+                "cm_per_pixel": cm_per_pixel,
+                "coordinate_system": "pixel",
+                "aggregation": "median",
+            },
+        )
