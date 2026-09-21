@@ -94,6 +94,25 @@ def test_configurable_base_weights_are_applied_only_to_present_methods():
     assert set(result.fusion_weights) == {"geometric", "head_bbox", "anthropometric"}
     assert result.fusion_weights["head_bbox"] > result.fusion_weights["geometric"]
     assert result.fusion_weights["anthropometric"] > 0.0
+    assert any(diagnostic.startswith("Raw weights:") for diagnostic in result.diagnostics)
+    assert any(
+        diagnostic.startswith("Normalized weights:")
+        for diagnostic in result.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    "base_weights",
+    [
+        {"unknown": 1.0},
+        {"geometric": float("inf")},
+        {"geometric": "invalid"},
+        {"geometric": -0.1},
+    ],
+)
+def test_invalid_base_weights_are_rejected_clearly(base_weights):
+    with pytest.raises(ValueError, match="weight|fusion method"):
+        MeasurementFusionEngine(base_weights=base_weights)
 
 
 def test_duplicate_methods_are_rejected():

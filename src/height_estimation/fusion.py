@@ -20,6 +20,8 @@ DEFAULT_BASE_WEIGHTS = {
     MeasurementMethod.ANTHROPOMETRIC.value: 0.3,
 }
 
+SUPPORTED_FUSION_METHODS = frozenset(DEFAULT_BASE_WEIGHTS)
+
 
 def _quality_factor(quality: QualityAssessment) -> float:
     return {
@@ -94,16 +96,25 @@ class MeasurementFusionEngine:
             configured_weights.update(base_weights)
         if not configured_weights:
             raise ValueError("base weights cannot be empty")
+        numeric_weights: dict[str, float] = {}
         for method, weight in configured_weights.items():
             if not isinstance(method, str) or not method:
                 raise ValueError("base weight method names must be non-empty")
-            if not isfinite(float(weight)) or float(weight) < 0.0:
+            if method not in SUPPORTED_FUSION_METHODS:
+                raise ValueError(f"unsupported fusion method: {method}")
+            try:
+                numeric_weight = float(weight)
+            except (TypeError, ValueError) as error:
+                raise ValueError("base weights must be numeric") from error
+            if not isfinite(numeric_weight) or numeric_weight < 0.0:
                 raise ValueError("base weights must be finite and non-negative")
-        if sum(configured_weights.values()) <= 0.0:
+            numeric_weights[method] = numeric_weight
+        total_base_weight = sum(numeric_weights.values())
+        if total_base_weight <= 0.0:
             raise ValueError("base weights must contain a positive value")
         self.base_weights = {
-            method: float(weight) / sum(configured_weights.values())
-            for method, weight in configured_weights.items()
+            method: weight / total_base_weight
+            for method, weight in numeric_weights.items()
         }
         self.uncertainty_estimator = (
             uncertainty_estimator or UncertaintyEstimator()
@@ -173,6 +184,16 @@ class MeasurementFusionEngine:
         methods_used = ", ".join(methods)
         diagnostics = (
             f"Fused {len(valid_estimates)} estimate(s) from: {methods_used}",
+            "Raw weights: "
+            + ", ".join(
+                f"{method}={raw_weights[method]:.6f}"
+                for method in methods
+            ),
+            "Normalized weights: "
+            + ", ".join(
+                f"{method}={weights[method]:.6f}"
+                for method in methods
+            ),
             f"Model agreement: {agreement:.3f}",
             f"Estimate spread: {self._spread(valid_estimates, fused_height):.3f} cm",
         )
