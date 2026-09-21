@@ -240,7 +240,24 @@ def fuse_height_estimates(
     quality: QualityAssessment | None = None,
     base_weights: Mapping[str, float] | None = None,
 ) -> MeasurementResult:
-    return MeasurementFusionEngine(base_weights=base_weights).fuse(
+    return build_measurement_result(
         estimates,
         quality=quality,
+        base_weights=base_weights,
     )
+
+
+def build_measurement_result(
+    estimates: Sequence[HeightEstimate],
+    *,
+    quality: QualityAssessment | None = None,
+    base_weights: Mapping[str, float] | None = None,
+    confidence_level: float = 0.95,
+) -> MeasurementResult:
+    """Build the stable result contract from already-produced estimates."""
+    return MeasurementFusionEngine(
+        base_weights=base_weights,
+        uncertainty_estimator=UncertaintyEstimator(
+            confidence_level=confidence_level,
+        ),
+    ).fuse(estimates, quality=quality)

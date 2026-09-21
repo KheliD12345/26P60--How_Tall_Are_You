@@ -3,6 +3,7 @@ import json
 import pytest
 
 from height_estimation.advanced_models import (
+    BodyDetections,
     HeightEstimate,
     MeasurementMethod,
     MeasurementResult,
@@ -10,7 +11,12 @@ from height_estimation.advanced_models import (
     QualityLevel,
     QualityMetrics,
 )
-from height_estimation.fusion import MeasurementFusionEngine, UncertaintyEstimator
+from height_estimation.estimators import estimate_independent_heights
+from height_estimation.fusion import (
+    MeasurementFusionEngine,
+    UncertaintyEstimator,
+    build_measurement_result,
+)
 
 
 def make_quality(
@@ -176,3 +182,25 @@ def test_smpl_estimate_is_not_fabricated_by_fusion():
         MeasurementFusionEngine().fuse(
             [estimate(MeasurementMethod.SMPL_BASED, 170.0, 0.9)]
         )
+
+
+def test_build_measurement_result_integrates_independent_estimator_outputs():
+    estimates = estimate_independent_heights(
+        BodyDetections(
+            head_top=(0.5, 0.1),
+            head_bottom=(0.5, 0.23),
+            head_bbox=(0.4, 0.1, 0.6, 0.3),
+            head_confidence=0.9,
+            keypoints={"left_heel": (0.5, 0.9)},
+        ),
+        cm_per_pixel=100.0,
+        image_size=(100, 100),
+    )
+
+    result = build_measurement_result(estimates, quality=make_quality())
+
+    assert result.method_estimates == estimates
+    assert result.estimated_height_cm > 0.0
+    assert result.uncertainty_range[0] <= result.estimated_height_cm
+    assert result.estimated_height_cm <= result.uncertainty_range[1]
+    assert json.loads(result.to_json()) == result.to_dict()
