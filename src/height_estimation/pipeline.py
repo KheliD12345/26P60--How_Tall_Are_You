@@ -30,7 +30,6 @@ from .body_detection import (
     DetectionStatus,
 )
 from .calibration import calibrate_image
-from .camera import undistort_image
 from .estimators import estimate_independent_heights
 from .fusion import build_measurement_result
 from .models import CalibrationResult, CameraCalibration, MarkerLayout
@@ -310,13 +309,6 @@ class _QualityStage:
         body: BodyDetectionResult | None = None,
     ) -> QualityAssessment:
         detections = None if body is None else body.detections
-        body_bbox = None
-        if (
-            detections is not None
-            and detections.head_bbox is not None
-            and detections.head_bbox_coordinate_system == "pixel"
-        ):
-            body_bbox = detections.head_bbox
         return self.gate.evaluate(
             image,
             detected_markers=len(calibration.markers),
@@ -327,7 +319,7 @@ class _QualityStage:
             segmentation_mask=(
                 None if detections is None else detections.segmentation_mask
             ),
-            body_bbox=body_bbox,
+            body_bbox=None,
         )
 
 
@@ -410,9 +402,11 @@ class MeasurementPipeline:
         stages: dict[PipelineStage, PipelineStageResult[object]] = {}
         image = self._load_image(pipeline_input, stages)
         calibration = self._run_calibration(pipeline_input, stages)
-        working_image = image
-        if calibration.camera_calibration is not None:
-            working_image = undistort_image(image, calibration.camera_calibration)
+        working_image = (
+            calibration.working_image
+            if isinstance(calibration.working_image, np.ndarray)
+            else image
+        )
 
         initial_quality = self._run_quality(
             working_image,
