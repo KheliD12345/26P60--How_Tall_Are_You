@@ -3,12 +3,26 @@ import json
 import pytest
 
 from height_estimation.cli import main
+from height_estimation.advanced_models import (
+    HeightEstimate,
+    MeasurementMethod,
+    MeasurementResult,
+    QualityAssessment,
+    QualityMetrics,
+)
 from height_estimation.models import (
     CalibrationResult,
     DetectedMarker,
     HomographyResult,
     MarkerPairGeometry,
     PersonEndpoints,
+)
+from height_estimation.pipeline import (
+    PipelineFailure,
+    PipelineRunResult,
+    PipelineStage,
+    PipelineStageResult,
+    PipelineStatus,
 )
 
 
@@ -205,3 +219,168 @@ def test_cli_rejects_person_detection_failure(tmp_path, monkeypatch, capsys):
 
     assert error.value.code == 2
     assert "could not refine person detection" in capsys.readouterr().err
+
+
+def make_pipeline_result(calibration):
+    quality = QualityAssessment(passed=True, metrics=QualityMetrics())
+    estimate = HeightEstimate(MeasurementMethod.GEOMETRIC, 170.0, 0.9)
+    measurement = MeasurementResult(
+        estimated_height_cm=170.0,
+        uncertainty_range=(165.0, 175.0),
+        quality=quality,
+        method_estimates=(estimate,),
+        fusion_weights={"geometric": 1.0},
+    )
+    return PipelineRunResult(
+        measurement_result=measurement,
+        stages={
+            PipelineStage.CALIBRATION: PipelineStageResult(
+                stage=PipelineStage.CALIBRATION,
+                status=PipelineStatus.SUCCESS,
+                value=calibration,
+            )
+        },
+    )
+
+
+def test_cli_full_pipeline_writes_measurement_json(tmp_path, monkeypatch, capsys):
+    calibration = make_calibration_result(())
+    image_path = tmp_path / "person.jpg"
+    layout_path = tmp_path / "layout.json"
+    output_path = tmp_path / "measurement.json"
+    image_path.write_bytes(b"image")
+    layout_path.write_text(json.dumps(make_layout_data()), encoding="utf-8")
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, *, config):
+            self.config = config
+            calls.append(config)
+
+        def run(self, pipeline_input):
+            result = make_pipeline_result(calibration)
+            self.config.output_path.write_text(
+                result.measurement_result.to_json(indent=2) + "\n",
+                encoding="utf-8",
+            )
+            return result
+
+    monkeypatch.setattr("height_estimation.cli.MeasurementPipeline", FakePipeline)
+
+    assert main(
+        [
+            "--pipeline",
+            str(image_path),
+            "--layout",
+            str(layout_path),
+            "--output",
+            str(output_path),
+            "--quality-policy",
+            "continue",
+            "--confidence-level",
+            "0.9",
+            "--no-person-fallback",
+        ]
+    ) == 0
+
+    assert json.loads(output_path.read_text(encoding="utf-8")) == (
+        make_pipeline_result(calibration).measurement_result.to_dict()
+    )
+    assert calls[0].quality_policy == "continue"
+    assert calls[0].confidence_level == 0.9
+    assert calls[0].use_person_fallback is False
+    assert "Wrote measurement result" in capsys.readouterr().out
+
+
+def test_cli_full_pipeline_reuses_calibration_for_overlay(tmp_path, monkeypatch):
+    calibration = make_calibration_result(())
+    image_path = tmp_path / "person.jpg"
+    overlay_path = tmp_path / "overlay.png"
+    image_path.write_bytes(b"image")
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, *, config):
+            del config
+
+        def run(self, pipeline_input):
+            return make_pipeline_result(calibration)
+
+    monkeypatch.setattr("height_estimation.cli.MeasurementPipeline", FakePipeline)
+    monkeypatch.setattr(
+        "height_estimation.cli.write_calibration_overlay",
+        lambda image, result, output: calls.append((image, result, output)),
+    )
+
+    assert main(
+        ["--pipeline", str(image_path), "--overlay", str(overlay_path)]
+    ) == 0
+    assert calls == [(image_path, calibration, overlay_path)]
+
+
+def test_cli_batch_continues_and_returns_failure_for_failed_image(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    output_dir = tmp_path / "outputs"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, *, config):
+            self.config = config
+
+        def run(self, pipeline_input):
+            calls.append(pipeline_input.image_path)
+            if pipeline_input.image_path == second:
+                raise PipelineFailure(
+                    "calibration_failed",
+                    "missing markers",
+                    stage=PipelineStage.CALIBRATION,
+                )
+            return make_pipeline_result(make_calibration_result(()))
+
+    monkeypatch.setattr("height_estimation.cli.MeasurementPipeline", FakePipeline)
+
+    assert main(
+        [
+            "--pipeline",
+            "--batch",
+            "--continue-on-error",
+            str(first),
+            str(second),
+            "--output-dir",
+            str(output_dir),
+        ]
+    ) == 2
+    assert calls == [first, second]
+    assert "missing markers" in capsys.readouterr().err
+
+
+def test_cli_full_pipeline_reports_failure_with_nonzero_status(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    image_path = tmp_path / "person.jpg"
+    image_path.write_bytes(b"image")
+
+    class FakePipeline:
+        def __init__(self, *, config):
+            del config
+
+        def run(self, pipeline_input):
+            raise PipelineFailure(
+                "quality_failed",
+                "image is too blurry",
+                stage=PipelineStage.QUALITY_REASSESSMENT,
+            )
+
+    monkeypatch.setattr("height_estimation.cli.MeasurementPipeline", FakePipeline)
+
+    assert main(["--pipeline", str(image_path)]) == 2
+    assert "image is too blurry" in capsys.readouterr().err
