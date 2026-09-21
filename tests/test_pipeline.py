@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import cv2
+import json
 
 from height_estimation.advanced_models import (
     BodyDetections,
@@ -126,6 +127,20 @@ def test_pipeline_input_normalises_paths_and_preserves_calibration_option():
 def test_pipeline_config_rejects_invalid_values(kwargs, message):
     with pytest.raises(ValueError, match=message):
         PipelineConfig(**kwargs)
+
+
+def test_pipeline_config_requires_directory_for_intermediate_outputs(tmp_path):
+    with pytest.raises(ValueError, match="intermediate_output_dir"):
+        PipelineConfig(write_intermediate_outputs=True)
+
+    config = PipelineConfig(
+        output_path=tmp_path / "result.json",
+        intermediate_output_dir=tmp_path / "stages",
+        write_intermediate_outputs=True,
+    )
+
+    assert config.output_path == tmp_path / "result.json"
+    assert config.intermediate_output_dir == tmp_path / "stages"
 
 
 def test_pipeline_stage_order_captures_quality_reassessment_before_estimation():
@@ -382,6 +397,65 @@ def test_measurement_pipeline_runs_stages_in_order_and_returns_measurement(tmp_p
         PipelineStage.ESTIMATION,
         PipelineStage.FUSION,
     }
+
+
+def test_pipeline_run_result_serializes_stage_summary_as_json():
+    result = PipelineRunResult(
+        measurement_result=make_measurement_result(),
+        stages={
+            PipelineStage.FUSION: PipelineStageResult(
+                stage=PipelineStage.FUSION,
+                status=PipelineStatus.SUCCESS,
+                value=make_measurement_result(),
+            )
+        },
+        diagnostics=("completed",),
+    )
+
+    payload = json.loads(result.to_json(indent=2))
+
+    assert payload["measurement_result"]["estimated_height_cm"] == 170.0
+    assert payload["stages"]["fusion"]["status"] == "success"
+    assert payload["diagnostics"] == ["completed"]
+
+
+def test_measurement_pipeline_persists_final_and_intermediate_outputs(tmp_path):
+    pipeline, pipeline_input, _ = make_pipeline(tmp_path)
+    output_path = tmp_path / "results" / "measurement.json"
+    intermediate_dir = tmp_path / "results" / "intermediate"
+    pipeline.config = PipelineConfig(
+        quality_policy="continue",
+        output_path=output_path,
+        intermediate_output_dir=intermediate_dir,
+        write_intermediate_outputs=True,
+    )
+
+    result = pipeline.run(pipeline_input)
+
+    final_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    intermediate_payload = json.loads(
+        (intermediate_dir / "pipeline_stages.json").read_text(encoding="utf-8")
+    )
+    assert final_payload == result.measurement_result.to_dict()
+    assert intermediate_payload["measurement_result"] == final_payload
+    assert intermediate_payload["stages"]["persistence"]["status"] == "success"
+    assert PipelineStage.PERSISTENCE in result.stages
+
+
+def test_measurement_pipeline_reports_output_write_failure(tmp_path):
+    blocked_path = tmp_path / "blocked"
+    blocked_path.write_text("not a directory", encoding="utf-8")
+    pipeline, pipeline_input, _ = make_pipeline(tmp_path)
+    pipeline.config = PipelineConfig(
+        quality_policy="continue",
+        output_path=blocked_path / "measurement.json",
+    )
+
+    with pytest.raises(PipelineFailure) as error:
+        pipeline.run(pipeline_input)
+
+    assert error.value.code is PipelineFailureCode.OUTPUT_WRITE_FAILED
+    assert error.value.stage is PipelineStage.PERSISTENCE
 
 
 def test_measurement_pipeline_preserves_partial_body_detection(tmp_path):

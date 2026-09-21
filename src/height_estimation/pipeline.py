@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import json
 from math import isfinite
 from pathlib import Path
 from typing import (
@@ -103,6 +104,9 @@ class PipelineConfig:
     quality_policy: Literal["fail", "continue"] = "fail"
     confidence_level: float = 0.95
     use_person_fallback: bool = True
+    output_path: Path | None = None
+    intermediate_output_dir: Path | None = None
+    write_intermediate_outputs: bool = False
 
     def __post_init__(self) -> None:
         if self.quality_policy not in {"fail", "continue"}:
@@ -111,6 +115,24 @@ class PipelineConfig:
             raise ValueError("confidence level must be between zero and one")
         if not isinstance(self.use_person_fallback, bool):
             raise ValueError("use_person_fallback must be a boolean")
+        output_path = None if self.output_path is None else Path(self.output_path)
+        intermediate_dir = (
+            None
+            if self.intermediate_output_dir is None
+            else Path(self.intermediate_output_dir)
+        )
+        if output_path is not None and not str(output_path).strip():
+            raise ValueError("output_path must not be empty")
+        if intermediate_dir is not None and not str(intermediate_dir).strip():
+            raise ValueError("intermediate_output_dir must not be empty")
+        if not isinstance(self.write_intermediate_outputs, bool):
+            raise ValueError("write_intermediate_outputs must be a boolean")
+        if self.write_intermediate_outputs and intermediate_dir is None:
+            raise ValueError(
+                "intermediate_output_dir is required when writing intermediate outputs"
+            )
+        object.__setattr__(self, "output_path", output_path)
+        object.__setattr__(self, "intermediate_output_dir", intermediate_dir)
 
 
 StageValue = TypeVar("StageValue")
@@ -141,6 +163,22 @@ class PipelineStageResult(Generic[StageValue]):
     @property
     def available(self) -> bool:
         return self.status in {PipelineStatus.SUCCESS, PipelineStatus.PARTIAL}
+
+    def to_dict(self) -> dict[str, object]:
+        value = self.value
+        if hasattr(value, "to_dict"):
+            serialised_value = value.to_dict()
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            serialised_value = value
+        else:
+            serialised_value = None
+        return {
+            "stage": self.stage.value,
+            "status": self.status.value,
+            "value": serialised_value,
+            "diagnostics": list(self.diagnostics),
+            "warnings": list(self.warnings),
+        }
 
 
 @dataclass(frozen=True)
@@ -174,6 +212,24 @@ class PipelineRunResult:
         object.__setattr__(self, "stages", stages)
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
         object.__setattr__(self, "warnings", tuple(self.warnings))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "measurement_result": (
+                None
+                if self.measurement_result is None
+                else self.measurement_result.to_dict()
+            ),
+            "stages": {
+                stage.value: result.to_dict()
+                for stage, result in self.stages.items()
+            },
+            "diagnostics": list(self.diagnostics),
+            "warnings": list(self.warnings),
+        }
+
+    def to_json(self, *, indent: int | None = None) -> str:
+        return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
 
 
 @runtime_checkable
@@ -423,6 +479,14 @@ class MeasurementPipeline:
         measurement = self._run_fusion(estimates, quality, stages)
         diagnostics = self._collect_messages(stages, "diagnostics")
         warnings = self._collect_messages(stages, "warnings")
+        self._persist(
+            measurement,
+            stages=stages,
+            diagnostics=diagnostics,
+            warnings=warnings,
+        )
+        diagnostics = self._collect_messages(stages, "diagnostics")
+        warnings = self._collect_messages(stages, "warnings")
         return PipelineRunResult(
             measurement_result=measurement,
             stages=stages,
@@ -617,6 +681,67 @@ class MeasurementPipeline:
             warnings=measurement.warnings,
         )
         return measurement
+
+    def _persist(
+        self,
+        measurement: MeasurementResult,
+        *,
+        stages: dict[PipelineStage, PipelineStageResult[object]],
+        diagnostics: tuple[str, ...],
+        warnings: tuple[str, ...],
+    ) -> None:
+        output_path = self.config.output_path
+        intermediate_dir = self.config.intermediate_output_dir
+        if output_path is None and not self.config.write_intermediate_outputs:
+            return
+        written_paths: list[Path] = []
+        try:
+            if output_path is not None:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(
+                    measurement.to_json(indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                written_paths.append(output_path)
+            if self.config.write_intermediate_outputs:
+                if intermediate_dir is None:
+                    raise ValueError("intermediate output directory is not configured")
+                intermediate_dir.mkdir(parents=True, exist_ok=True)
+                intermediate_path = intermediate_dir / "pipeline_stages.json"
+                written_paths.append(intermediate_path)
+            stages[PipelineStage.PERSISTENCE] = PipelineStageResult(
+                stage=PipelineStage.PERSISTENCE,
+                status=PipelineStatus.SUCCESS,
+                diagnostics=(
+                    "Wrote pipeline output to: "
+                    + ", ".join(str(path) for path in written_paths),
+                ),
+            )
+            if self.config.write_intermediate_outputs:
+                intermediate_path.write_text(
+                    json.dumps(
+                        {
+                            "measurement_result": measurement.to_dict(),
+                            "stages": {
+                                stage.value: result.to_dict()
+                                for stage, result in stages.items()
+                            },
+                            "diagnostics": list(diagnostics),
+                            "warnings": list(warnings),
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+        except (OSError, TypeError, ValueError) as error:
+            self._fail(
+                PipelineFailureCode.OUTPUT_WRITE_FAILED,
+                f"could not write pipeline output: {error}",
+                PipelineStage.PERSISTENCE,
+                stages,
+            )
 
     @staticmethod
     def _collect_messages(
