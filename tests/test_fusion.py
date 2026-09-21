@@ -176,8 +176,8 @@ def test_close_estimates_do_not_emit_disagreement_warning():
 def test_divergent_estimates_emit_disagreement_warning():
     result = MeasurementFusionEngine().fuse(
         [
-            estimate(MeasurementMethod.GEOMETRIC, 100.0, 0.9),
-            estimate(MeasurementMethod.HEAD_BBOX, 240.0, 0.9),
+            estimate(MeasurementMethod.GEOMETRIC, 50.0, 0.9),
+            estimate(MeasurementMethod.HEAD_BBOX, 300.0, 0.9),
         ],
         quality=make_quality(),
     )
