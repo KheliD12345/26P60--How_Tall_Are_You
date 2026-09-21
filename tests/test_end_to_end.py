@@ -122,6 +122,28 @@ def test_module_command_reports_missing_markers(tmp_path):
     assert "missing required ArUco markers" in completed.stderr
 
 
+def test_module_command_pipeline_reports_unavailable_body_detection(tmp_path):
+    image_path = tmp_path / "markers.png"
+    layout_path = tmp_path / "layout.json"
+    output_path = tmp_path / "measurement.json"
+    make_image(image_path)
+    make_layout(layout_path)
+
+    completed = run_cli(
+        "--pipeline",
+        "--no-person-fallback",
+        str(image_path),
+        "--layout",
+        str(layout_path),
+        "--output",
+        str(output_path),
+    )
+
+    assert completed.returncode == 2
+    assert "optional detector is not configured" in completed.stderr
+    assert not output_path.exists()
+
+
 @pytest.mark.parametrize("image_name", ["test-khelan.jpg", "test-shriya.jpg"])
 def test_sample_image_writes_perspective_height(tmp_path, image_name):
     image_path = PROJECT_ROOT / image_name
