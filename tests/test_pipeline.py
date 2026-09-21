@@ -18,7 +18,7 @@ from height_estimation.body_detection import (
     DetectionStatus,
     DetectorResult,
 )
-from height_estimation.models import MarkerLayout, MarkerPosition
+from height_estimation.models import CalibrationResult, MarkerLayout, MarkerPosition
 from height_estimation.fusion import build_measurement_result
 from height_estimation.pipeline import (
     PIPELINE_STAGE_ORDER,
@@ -397,6 +397,64 @@ def test_measurement_pipeline_runs_stages_in_order_and_returns_measurement(tmp_p
         PipelineStage.ESTIMATION,
         PipelineStage.FUSION,
     }
+
+
+def test_pipeline_reuses_calibration_working_image_without_redistorting(tmp_path):
+    image = np.zeros((20, 30, 3), dtype=np.uint8)
+    working_image = np.full((20, 30, 3), 7, dtype=np.uint8)
+    image_path = tmp_path / "input.png"
+    assert cv2.imwrite(str(image_path), image)
+    calibration = make_calibration()
+    calibration = CalibrationResult(
+        markers=calibration.markers,
+        geometry=calibration.geometry,
+        cm_per_pixel=calibration.cm_per_pixel,
+        homography=calibration.homography,
+        camera_calibration=object(),
+        working_image=working_image,
+    )
+    seen = {}
+
+    class Calibration:
+        def run(self, pipeline_input):
+            del pipeline_input
+            return calibration
+
+    class Quality:
+        def run(self, image_value, *, calibration, body=None):
+            del calibration, body
+            seen.setdefault("quality", []).append(image_value)
+            return make_quality()
+
+    class Body:
+        def run(self, image_value):
+            seen["body"] = image_value
+            return make_body_result()
+
+    class Estimation:
+        def run(self, detections, *, calibration, quality, image_size):
+            del detections, calibration, quality, image_size
+            return (HeightEstimate(MeasurementMethod.GEOMETRIC, 170.0, 0.9),)
+
+    class Fusion:
+        def run(self, estimates, *, quality):
+            return build_measurement_result(estimates, quality=quality)
+
+    pipeline = MeasurementPipeline(
+        dependencies=PipelineDependencies(
+            calibration=Calibration(),
+            quality=Quality(),
+            body_detection=Body(),
+            estimation=Estimation(),
+            fusion=Fusion(),
+        )
+    )
+    pipeline.run(
+        PipelineInput(image_path=image_path, layout=make_layout())
+    )
+
+    assert seen["body"] is working_image
+    assert all(value is working_image for value in seen["quality"])
 
 
 def test_pipeline_run_result_serializes_stage_summary_as_json():

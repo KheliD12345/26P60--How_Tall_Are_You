@@ -80,6 +80,7 @@ def calibrate_image(
             if camera_calibration is not None
             else "Camera calibration was not supplied."
         ,),
+        working_image=working_image,
     )
 
 

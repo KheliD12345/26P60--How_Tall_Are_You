@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from math import isfinite
 from pathlib import Path
@@ -233,6 +233,7 @@ class CalibrationResult:
     perspective_height_cm: float | None = None
     camera_calibration: CameraCalibration | None = None
     diagnostics: tuple[str, ...] = ()
+    working_image: Any | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isfinite(self.cm_per_pixel) or self.cm_per_pixel <= 0:
