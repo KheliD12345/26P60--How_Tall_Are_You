@@ -65,6 +65,33 @@ def test_single_estimate_is_fused_with_conservative_agreement():
     assert result.uncertainty_range[0] < 172.0 < result.uncertainty_range[1]
 
 
+def test_single_estimate_confidence_changes_uncertainty_width():
+    high_confidence = MeasurementFusionEngine().fuse(
+        [estimate(MeasurementMethod.GEOMETRIC, 172.0, 1.0)],
+        quality=make_quality(),
+    )
+    low_confidence = MeasurementFusionEngine().fuse(
+        [estimate(MeasurementMethod.GEOMETRIC, 172.0, 0.2)],
+        quality=make_quality(),
+    )
+
+    high_width = high_confidence.uncertainty_range[1] - high_confidence.uncertainty_range[0]
+    low_width = low_confidence.uncertainty_range[1] - low_confidence.uncertainty_range[0]
+    assert low_width > high_width
+
+
+def test_missing_quality_is_conservative_and_reported():
+    result = MeasurementFusionEngine().fuse(
+        [estimate(MeasurementMethod.GEOMETRIC, 172.0, 0.9)]
+    )
+
+    assert result.quality.passed is False
+    assert result.quality.metrics.marker_visibility == 0.0
+    assert result.quality.metrics.model_agreement == 0.25
+    assert any("quality evidence was not supplied" in warning for warning in result.warnings)
+    assert any("quality evidence was not supplied" in diagnostic for diagnostic in result.diagnostics)
+
+
 def test_multiple_estimates_use_confidence_weighted_fusion():
     result = MeasurementFusionEngine().fuse(
         [
@@ -222,6 +249,30 @@ def test_uncertainty_estimator_supports_configurable_confidence_level():
 
     assert interval[0] < 170.0 < interval[1]
     assert all(value >= 0.0 for value in interval)
+
+
+@pytest.mark.parametrize(
+    "weights, message",
+    [
+        ({"geometric": 1.0}, "missing required methods"),
+        ({"geometric": -1.0, "head_bbox": 1.0}, "finite, non-negative"),
+        ({"geometric": float("inf"), "head_bbox": 1.0}, "finite, non-negative"),
+        ({"geometric": 0.0, "head_bbox": 0.0}, "positive value"),
+    ],
+)
+def test_uncertainty_estimator_rejects_invalid_weights(weights, message):
+    estimates = (
+        estimate(MeasurementMethod.GEOMETRIC, 169.0, 0.9),
+        estimate(MeasurementMethod.HEAD_BBOX, 171.0, 0.9),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        UncertaintyEstimator().interval(
+            fused_height_cm=170.0,
+            estimates=estimates,
+            quality=make_quality(),
+            weights=weights,
+        )
 
 
 def test_uncertainty_interval_grows_monotonically_with_confidence_level():
