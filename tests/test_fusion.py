@@ -154,6 +154,38 @@ def test_quality_and_estimate_spread_expand_uncertainty():
     assert good.estimated_height_cm <= good.uncertainty_range[1]
     assert poor.uncertainty_range[0] < good.uncertainty_range[0]
     assert poor.uncertainty_range[1] > good.uncertainty_range[1]
+    assert poor.warnings == (
+        "Acquisition quality is low; the uncertainty interval was expanded.",
+    )
+    assert good.warnings == ()
+
+
+def test_close_estimates_do_not_emit_disagreement_warning():
+    result = MeasurementFusionEngine().fuse(
+        [
+            estimate(MeasurementMethod.GEOMETRIC, 170.0, 0.9),
+            estimate(MeasurementMethod.HEAD_BBOX, 171.0, 0.9),
+        ],
+        quality=make_quality(),
+    )
+
+    assert result.quality.metrics.model_agreement >= 0.5
+    assert result.warnings == ()
+
+
+def test_divergent_estimates_emit_disagreement_warning():
+    result = MeasurementFusionEngine().fuse(
+        [
+            estimate(MeasurementMethod.GEOMETRIC, 100.0, 0.9),
+            estimate(MeasurementMethod.HEAD_BBOX, 240.0, 0.9),
+        ],
+        quality=make_quality(),
+    )
+
+    assert result.quality.metrics.model_agreement < 0.5
+    assert result.warnings == (
+        "Independent estimates disagree substantially; review the result.",
+    )
 
 
 def test_uncertainty_estimator_supports_configurable_confidence_level():
