@@ -204,7 +204,7 @@ class MeasurementFusionEngine:
             "estimate_spread_cm": self._spread(valid_estimates, fused_height),
         }
         warnings: list[str] = []
-        if updated_quality.quality_level in {
+        if self._acquisition_quality_level(source_quality) in {
             QualityLevel.LOW,
             QualityLevel.UNUSABLE,
         }:
@@ -234,6 +234,22 @@ class MeasurementFusionEngine:
         return sqrt(
             mean((estimate.height_cm - fused_height) ** 2 for estimate in estimates)
         )
+
+    @staticmethod
+    def _acquisition_quality_level(quality: QualityAssessment) -> QualityLevel:
+        score = (
+            quality.metrics.marker_visibility
+            + (1.0 - quality.metrics.pose_severity)
+            + quality.metrics.blur_score
+            + quality.metrics.occlusion_score
+        ) / 4.0
+        if score >= 0.8:
+            return QualityLevel.HIGH
+        if score >= 0.6:
+            return QualityLevel.MODERATE
+        if score >= 0.4:
+            return QualityLevel.LOW
+        return QualityLevel.UNUSABLE
 
     @classmethod
     def _agreement(
