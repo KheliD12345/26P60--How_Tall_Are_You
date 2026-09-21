@@ -203,6 +203,18 @@ class MeasurementFusionEngine:
             "model_agreement": agreement,
             "estimate_spread_cm": self._spread(valid_estimates, fused_height),
         }
+        warnings: list[str] = []
+        if updated_quality.quality_level in {
+            QualityLevel.LOW,
+            QualityLevel.UNUSABLE,
+        }:
+            warnings.append(
+                "Acquisition quality is low; the uncertainty interval was expanded."
+            )
+        if agreement < 0.5 and len(valid_estimates) > 1:
+            warnings.append(
+                "Independent estimates disagree substantially; review the result."
+            )
         return MeasurementResult(
             estimated_height_cm=fused_height,
             uncertainty_range=uncertainty_range,
@@ -211,6 +223,7 @@ class MeasurementFusionEngine:
             fusion_weights=weights,
             measurements=measurements,
             diagnostics=diagnostics,
+            warnings=tuple(warnings),
         )
 
     @staticmethod
