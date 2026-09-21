@@ -21,6 +21,8 @@ DEFAULT_BASE_WEIGHTS = {
 }
 
 SUPPORTED_FUSION_METHODS = frozenset(DEFAULT_BASE_WEIGHTS)
+BASE_SINGLE_ESTIMATE_ERROR = 0.02
+CONFIDENCE_SINGLE_ESTIMATE_ERROR = 0.05
 
 
 def _quality_factor(quality: QualityAssessment) -> float:
@@ -56,15 +58,43 @@ class UncertaintyEstimator:
         values = [estimate.height_cm for estimate in estimates]
         average_confidence = mean(estimate.confidence for estimate in estimates)
         if len(values) == 1:
-            standard_error = fused_height_cm * 0.02
+            standard_error = fused_height_cm * (
+                BASE_SINGLE_ESTIMATE_ERROR
+                + (1.0 - estimates[0].confidence)
+                * CONFIDENCE_SINGLE_ESTIMATE_ERROR
+            )
         else:
             if weights is None:
                 squared_spread = mean(
                     (value - fused_height_cm) ** 2 for value in values
                 )
             else:
+                required_methods = {estimate.method.value for estimate in estimates}
+                missing_methods = required_methods.difference(weights)
+                if missing_methods:
+                    missing = ", ".join(sorted(missing_methods))
+                    raise ValueError(
+                        f"uncertainty weights are missing required methods: {missing}"
+                    )
+                validated_weights: dict[str, float] = {}
+                for method in required_methods:
+                    try:
+                        weight = float(weights[method])
+                    except (KeyError, TypeError, ValueError) as error:
+                        raise ValueError(
+                            "uncertainty weights must be finite, non-negative numbers"
+                        ) from error
+                    if not isfinite(weight) or weight < 0.0:
+                        raise ValueError(
+                            "uncertainty weights must be finite, non-negative numbers"
+                        )
+                    validated_weights[method] = weight
+                if sum(validated_weights.values()) <= 0.0:
+                    raise ValueError(
+                        "uncertainty weights must contain a positive value"
+                    )
                 squared_spread = sum(
-                    weights[estimate.method.value]
+                    validated_weights[estimate.method.value]
                     * (estimate.height_cm - fused_height_cm) ** 2
                     for estimate in estimates
                 )
@@ -160,9 +190,16 @@ class MeasurementFusionEngine:
             raise ValueError("fused height must be finite and positive")
 
         agreement = self._agreement(valid_estimates, fused_height, weights)
+        quality_was_supplied = quality is not None
         source_quality = quality or QualityAssessment(
-            passed=True,
-            metrics=QualityMetrics(),
+            passed=False,
+            metrics=QualityMetrics(
+                marker_visibility=0.0,
+                pose_severity=1.0,
+                blur_score=0.0,
+                occlusion_score=0.0,
+            ),
+            recommendations=("Acquisition quality evidence was not supplied.",),
         )
         updated_quality = QualityAssessment(
             passed=source_quality.passed,
@@ -204,6 +241,13 @@ class MeasurementFusionEngine:
             "estimate_spread_cm": self._spread(valid_estimates, fused_height),
         }
         warnings: list[str] = []
+        if not quality_was_supplied:
+            diagnostics += (
+                "Acquisition quality evidence was not supplied; quality is unknown.",
+            )
+            warnings.append(
+                "Acquisition quality evidence was not supplied; review the result conservatively."
+            )
         if self._acquisition_quality_level(source_quality) in {
             QualityLevel.LOW,
             QualityLevel.UNUSABLE,
