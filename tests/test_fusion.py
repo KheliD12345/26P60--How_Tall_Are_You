@@ -160,6 +160,27 @@ def test_quality_and_estimate_spread_expand_uncertainty():
     assert good.warnings == ()
 
 
+def test_lower_estimator_confidence_expands_uncertainty():
+    high_confidence = MeasurementFusionEngine().fuse(
+        [
+            estimate(MeasurementMethod.GEOMETRIC, 170.0, 1.0),
+            estimate(MeasurementMethod.HEAD_BBOX, 170.0, 1.0),
+        ],
+        quality=make_quality(),
+    )
+    low_confidence = MeasurementFusionEngine().fuse(
+        [
+            estimate(MeasurementMethod.GEOMETRIC, 170.0, 0.2),
+            estimate(MeasurementMethod.HEAD_BBOX, 170.0, 0.2),
+        ],
+        quality=make_quality(),
+    )
+
+    high_width = high_confidence.uncertainty_range[1] - high_confidence.uncertainty_range[0]
+    low_width = low_confidence.uncertainty_range[1] - low_confidence.uncertainty_range[0]
+    assert low_width > high_width
+
+
 def test_close_estimates_do_not_emit_disagreement_warning():
     result = MeasurementFusionEngine().fuse(
         [
