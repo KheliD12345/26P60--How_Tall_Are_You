@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from math import isfinite, sqrt
-from statistics import mean
+from statistics import NormalDist, mean
 from typing import Mapping, Sequence
 
 from .advanced_models import (
@@ -70,9 +70,9 @@ class UncertaintyEstimator:
             confidence_error = fused_height_cm * (1.0 - average_confidence) * 0.05
             standard_error = sqrt(spread**2 + confidence_error**2)
 
-        z_value = 1.96 if self.confidence_level <= 0.95 else 2.576
-        if self.confidence_level < 0.95:
-            z_value = 1.645
+        z_value = NormalDist().inv_cdf(
+            0.5 + self.confidence_level / 2.0
+        )
         margin = z_value * standard_error * _quality_factor(quality)
         margin = max(margin, fused_height_cm * 0.005)
         lower = max(0.0, fused_height_cm - margin)

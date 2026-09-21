@@ -152,6 +152,41 @@ def test_uncertainty_estimator_supports_configurable_confidence_level():
     assert all(value >= 0.0 for value in interval)
 
 
+def test_uncertainty_interval_grows_monotonically_with_confidence_level():
+    estimates = (
+        estimate(MeasurementMethod.GEOMETRIC, 165.0, 0.9),
+        estimate(MeasurementMethod.HEAD_BBOX, 175.0, 0.9),
+    )
+    quality = make_quality()
+
+    ninety_percent = UncertaintyEstimator(confidence_level=0.90).interval(
+        fused_height_cm=170.0,
+        estimates=estimates,
+        quality=quality,
+    )
+    ninety_five_percent = UncertaintyEstimator(confidence_level=0.95).interval(
+        fused_height_cm=170.0,
+        estimates=estimates,
+        quality=quality,
+    )
+    ninety_nine_percent = UncertaintyEstimator(confidence_level=0.99).interval(
+        fused_height_cm=170.0,
+        estimates=estimates,
+        quality=quality,
+    )
+
+    assert ninety_five_percent[0] < ninety_percent[0]
+    assert ninety_five_percent[1] > ninety_percent[1]
+    assert ninety_nine_percent[0] < ninety_five_percent[0]
+    assert ninety_nine_percent[1] > ninety_five_percent[1]
+
+
+@pytest.mark.parametrize("confidence_level", [0.0, 1.0, -0.1, 1.1])
+def test_uncertainty_estimator_rejects_invalid_confidence_levels(confidence_level):
+    with pytest.raises(ValueError, match="confidence level"):
+        UncertaintyEstimator(confidence_level=confidence_level)
+
+
 def test_fusion_result_is_json_safe_and_preserves_methods():
     result = MeasurementFusionEngine().fuse(
         [
