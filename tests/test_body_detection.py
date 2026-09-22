@@ -11,7 +11,11 @@ from height_estimation.body_detection import (
     HandDetectorAdapter,
     HeadDetectorAdapter,
     LazyHeadDetectorAdapter,
+    LazyHandDetectorAdapter,
     LazyPoseDetectorAdapter,
+    LazySegmentationDetectorAdapter,
+    MediaPipeHandDetectorAdapter,
+    MediaPipeSegmentationAdapter,
     PersonFallbackAdapter,
     PoseDetectorAdapter,
     SegmentationDetectorAdapter,
@@ -239,6 +243,185 @@ def test_hand_detector_adapter_reports_hand_count():
 
     assert result.status == DetectionStatus.SUCCESS
     assert result.metadata["hand_count"] == 1
+
+
+def test_mediapipe_segmentation_requests_full_mask_and_caches_segmenter():
+    mask = np.zeros((12, 9), dtype=np.uint8)
+    mask[2:8, 3:6] = 1
+    calls = []
+
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            calls.append((image.shape, return_mask))
+            return {
+                "hair_length": {
+                    "top": {"y": 0.2},
+                    "bottom": {"y": 0.7},
+                },
+                "mask": mask,
+            }
+
+    adapter = MediaPipeSegmentationAdapter(lambda: StubSegmenter())
+    image = np.zeros((20, 16, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == [((20, 16, 3), True), ((20, 16, 3), True)]
+    assert np.array_equal(first.detections.segmentation_mask, mask)
+    assert first.detections.hair_top == Landmark(0.5, 0.2)
+    assert first.detections.hair_bottom == Landmark(0.5, 0.7)
+    assert first.detections.hair_top.coordinate_system == "normalized"
+    assert first.metadata["mask_shape"] == (12, 9)
+    assert first.metadata["mask_coordinate_system"] == "pixel"
+    assert isinstance(adapter, LazySegmentationDetectorAdapter)
+
+
+def test_mediapipe_segmentation_preserves_nested_mask_payload():
+    mask = np.ones((5, 4), dtype=np.float32)
+
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            assert return_mask is True
+            return {
+                "segmentation": {
+                    "mask": mask,
+                    "hair_top": {"y": 0.1},
+                    "hair_bottom": {"y": 0.8},
+                }
+            }
+
+    result = MediaPipeSegmentationAdapter(lambda: StubSegmenter()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.SUCCESS
+    assert np.array_equal(result.detections.segmentation_mask, mask)
+    assert result.metadata["mask_coordinate_system"] == "pixel"
+
+
+def test_mediapipe_segmentation_empty_result_is_no_person():
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            assert return_mask is True
+            return {}
+
+    result = MediaPipeSegmentationAdapter(lambda: StubSegmenter()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.detections.segmentation_mask is None
+
+
+def test_mediapipe_segmentation_rejects_malformed_mask():
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            return {"mask": [["hair"]]}
+
+    result = MediaPipeSegmentationAdapter(lambda: StubSegmenter()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.FAILED
+    assert "numeric" in result.diagnostics[0]
+
+
+def test_mediapipe_segmentation_reports_missing_dependency_as_unavailable():
+    adapter = MediaPipeSegmentationAdapter(
+        module_name="height_estimation._missing_mediapipe_segmenter"
+    )
+
+    result = adapter.detect(np.zeros((10, 10, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.UNAVAILABLE
+    assert "missing_mediapipe_segmenter" in result.diagnostics[0]
+
+
+def test_mediapipe_hand_adapter_preserves_subject_relative_measurements():
+    calls = 0
+
+    class StubHandDetector:
+        def detect(self, image):
+            nonlocal calls
+            calls += 1
+            return {
+                "hands": [
+                    {
+                        "handedness": "Left",
+                        "confidence": 0.85,
+                        "hand_length": {
+                            "landmark_0": {"x": 0.2, "y": 0.6},
+                            "landmark_12": {"x": 0.25, "y": 0.5},
+                        },
+                        "all_landmarks": {},
+                    }
+                ]
+            }
+
+    adapter = MediaPipeHandDetectorAdapter(lambda: StubHandDetector())
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == 2
+    assert first.detections.handedness == ("left",)
+    assert first.detections.hand_confidences == (0.85,)
+    assert first.detections.hand_lengths[0] == (
+        Landmark(0.2, 0.6),
+        Landmark(0.25, 0.5),
+    )
+    assert isinstance(adapter, LazyHandDetectorAdapter)
+
+
+def test_mediapipe_hand_adapter_empty_result_is_no_person():
+    class StubHandDetector:
+        def detect(self, image):
+            return {"hands": []}
+
+    result = MediaPipeHandDetectorAdapter(lambda: StubHandDetector()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.detections.hand_lengths == ()
+
+
+def test_mediapipe_hand_adapter_rejects_image_perspective_labels():
+    class StubHandDetector:
+        def detect(self, image):
+            return {
+                "handedness_convention": "image",
+                "hands": [
+                    {
+                        "handedness": "Left",
+                        "hand_length": ((0.2, 0.6), (0.25, 0.5)),
+                    }
+                ],
+            }
+
+    result = MediaPipeHandDetectorAdapter(lambda: StubHandDetector()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.FAILED
+    assert "image-perspective" in result.diagnostics[0]
+
+
+def test_mediapipe_hand_adapter_reports_missing_model_dependency():
+    adapter = MediaPipeHandDetectorAdapter(
+        module_name="height_estimation._missing_mediapipe_hand_detector"
+    )
+
+    result = adapter.detect(np.zeros((10, 10, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.UNAVAILABLE
+    assert "missing_mediapipe_hand_detector" in result.diagnostics[0]
 
 
 def test_orchestrator_merges_stubbed_detectors_and_keeps_optional_statuses():

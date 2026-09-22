@@ -1125,7 +1125,6 @@ class VGGHeadsDetectorAdapter(HeadDetectorAdapter):
 LazyPoseDetectorAdapter = ViTPoseDetectorAdapter
 LazyHeadDetectorAdapter = VGGHeadsDetectorAdapter
 
-
 class SegmentationDetectorAdapter(_NormalisingAdapter):
     def __init__(self, detector: Callable[[np.ndarray], object] | ImageDetector):
         super().__init__(detector, "segmentation")
@@ -1140,6 +1139,129 @@ class HandDetectorAdapter(_NormalisingAdapter):
 
     def detect(self, image: np.ndarray) -> DetectorResult:
         return self._result(image, normalise_hand_detection)
+
+
+class MediaPipeSegmentationAdapter(SegmentationDetectorAdapter):
+    """Lazily load a MediaPipe hair segmenter and always request its mask."""
+
+    def __init__(
+        self,
+        detector_factory: Callable[[], object] | None = None,
+        *,
+        model_path: str | Path | None = None,
+        use_face_detection: bool = True,
+        detector_options: Mapping[str, Any] | None = None,
+        module_name: str = "mediapipe_detection.hair_segmentation",
+        detector_class_name: str = "HairSegmenter",
+    ) -> None:
+        options: dict[str, Any] = {
+            "model_path": model_path,
+            "use_face_detection": use_face_detection,
+        }
+        if detector_options is not None:
+            options.update(detector_options)
+        factory = detector_factory or _optional_class_factory(
+            module_name,
+            detector_class_name,
+            options,
+        )
+        self.lazy_detector = LazyDetector(factory, name="segmentation")
+        super().__init__(self.lazy_detector)
+
+    def _run(self, image: np.ndarray) -> object:
+        raw = self.lazy_detector.invoke("segment", image, return_mask=True)
+        if isinstance(raw, Mapping) and (
+            raw.get("status") in {
+                DetectionStatus.UNAVAILABLE.value,
+                DetectionStatus.FAILED.value,
+            }
+            or raw.get("success") is False
+        ):
+            return raw
+        if not isinstance(raw, Mapping):
+            return raw
+
+        payload = dict(raw)
+        nested = payload.get("segmentation")
+        if isinstance(nested, Mapping):
+            nested_payload = dict(nested)
+            if "mask" in nested_payload or "segmentation_mask" in nested_payload:
+                nested_payload.setdefault("mask_coordinate_system", "pixel")
+                payload.setdefault("mask_coordinate_system", "pixel")
+            payload["segmentation"] = nested_payload
+        elif "mask" in payload or "segmentation_mask" in payload:
+            payload.setdefault("mask_coordinate_system", "pixel")
+        metadata = payload.get("metadata")
+        metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        mask_source = nested if isinstance(nested, Mapping) else payload
+        raw_mask = mask_source.get(
+            "mask",
+            mask_source.get("segmentation_mask"),
+        )
+        if raw_mask is not None:
+            metadata.setdefault("mask_coordinate_system", "pixel")
+            try:
+                metadata.setdefault("mask_shape", tuple(np.asarray(raw_mask).shape))
+            except (TypeError, ValueError):
+                pass
+        payload["metadata"] = metadata
+        return payload
+
+
+class MediaPipeHandDetectorAdapter(HandDetectorAdapter):
+    """Lazily load a MediaPipe hand detector with subject-relative labels."""
+
+    def __init__(
+        self,
+        detector_factory: Callable[[], object] | None = None,
+        *,
+        model_path: str | Path | None = None,
+        num_hands: int = 2,
+        min_hand_detection_confidence: float = 0.5,
+        min_hand_presence_confidence: float = 0.5,
+        min_tracking_confidence: float = 0.5,
+        detector_options: Mapping[str, Any] | None = None,
+        module_name: str = "mediapipe_detection.hand_detection",
+        detector_class_name: str = "HandLandmarkDetector",
+    ) -> None:
+        options: dict[str, Any] = {
+            "model_path": model_path,
+            "num_hands": num_hands,
+            "min_hand_detection_confidence": min_hand_detection_confidence,
+            "min_hand_presence_confidence": min_hand_presence_confidence,
+            "min_tracking_confidence": min_tracking_confidence,
+        }
+        if detector_options is not None:
+            options.update(detector_options)
+        factory = detector_factory or _optional_class_factory(
+            module_name,
+            detector_class_name,
+            options,
+        )
+        self.lazy_detector = LazyDetector(factory, name="hands")
+        super().__init__(self.lazy_detector)
+
+    def _run(self, image: np.ndarray) -> object:
+        raw = self.lazy_detector.detect(image)
+        if isinstance(raw, Mapping) and (
+            raw.get("status") in {
+                DetectionStatus.UNAVAILABLE.value,
+                DetectionStatus.FAILED.value,
+            }
+            or raw.get("success") is False
+        ):
+            return raw
+        if not isinstance(raw, Mapping):
+            return raw
+        payload = dict(raw)
+        payload.setdefault("coordinate_system", "normalized")
+        payload.setdefault("handedness_convention", "subject")
+        payload.setdefault("labels_are_subject_relative", True)
+        return payload
+
+
+LazySegmentationDetectorAdapter = MediaPipeSegmentationAdapter
+LazyHandDetectorAdapter = MediaPipeHandDetectorAdapter
 
 
 class PersonFallbackAdapter:
