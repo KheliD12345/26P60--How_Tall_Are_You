@@ -55,6 +55,38 @@ Use `--no-person-fallback` to require configured model-backed body detectors.
 This is useful for verifying detector availability without silently using the
 OpenCV fallback.
 
+## Optional Model Adapters
+
+Optional model adapters can be wired explicitly through `PipelineConfig` when
+external detector packages are available. They are disabled by default and are
+constructed lazily on first inference call.
+
+```python
+from height_estimation.body_detection import (
+	BodyDetectionConfig,
+	MediaPipeHandDetectorAdapter,
+	MediaPipeSegmentationAdapter,
+	VGGHeadsDetectorAdapter,
+	ViTPoseDetectorAdapter,
+)
+from height_estimation.pipeline import PipelineConfig
+
+config = PipelineConfig(
+	use_person_fallback=True,
+	body_detection=BodyDetectionConfig(
+		pose_detector=ViTPoseDetectorAdapter(),
+		head_detector=VGGHeadsDetectorAdapter(),
+		segmentation_detector=MediaPipeSegmentationAdapter(),
+		hand_detector=MediaPipeHandDetectorAdapter(),
+	),
+)
+```
+
+When an optional dependency or model file is unavailable, the corresponding
+detector returns an unavailable status and the pipeline continues to use
+available evidence. Runtime detector errors remain failure statuses and are
+included in diagnostics.
+
 ## Batch Processing
 
 Batch mode accepts multiple image paths and writes one result per image. By
