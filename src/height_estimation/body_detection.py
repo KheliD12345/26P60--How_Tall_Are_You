@@ -1139,6 +1139,26 @@ class VGGHeadsDetectorAdapter(HeadDetectorAdapter):
                 raise ValueError(
                     "VGGHeads output marks a head as detected without a bounding box"
                 )
+            if raw.get("head_confidence") is None and raw.get("confidence") is None:
+                all_heads = raw.get("all_heads")
+                bbox = raw.get("head_bbox_pixels")
+                if isinstance(all_heads, list) and isinstance(bbox, Mapping):
+                    matching_scores = []
+                    for head in all_heads:
+                        if not isinstance(head, Mapping):
+                            continue
+                        head_bbox = head.get("bbox_pixels")
+                        score = head.get("confidence")
+                        if isinstance(head_bbox, Mapping) and score is not None:
+                            if all(
+                                float(head_bbox.get(axis, float("nan")))
+                                == float(bbox.get(axis, float("nan")))
+                                for axis in ("x1", "y1", "x2", "y2")
+                            ):
+                                matching_scores.append(float(score))
+                    if matching_scores:
+                        raw = dict(raw)
+                        raw["head_confidence"] = max(matching_scores)
         return raw
 
 
