@@ -170,6 +170,29 @@ def test_default_pipeline_dependencies_propagate_body_detection_configuration():
     assert result.detector_results["head"].status is DetectionStatus.UNAVAILABLE
 
 
+def test_default_pipeline_dependencies_propagate_confidence_level_to_fusion():
+    estimates = (
+        HeightEstimate(MeasurementMethod.GEOMETRIC, 165.0, 0.9),
+        HeightEstimate(MeasurementMethod.HEAD_BBOX, 175.0, 0.9),
+    )
+    ninety_percent = default_pipeline_dependencies(
+        PipelineConfig(confidence_level=0.90)
+    ).fusion.run(estimates, quality=make_quality())
+    ninety_nine_percent = default_pipeline_dependencies(
+        PipelineConfig(confidence_level=0.99)
+    ).fusion.run(estimates, quality=make_quality())
+
+    ninety_width = (
+        ninety_percent.uncertainty_range[1]
+        - ninety_percent.uncertainty_range[0]
+    )
+    ninety_nine_width = (
+        ninety_nine_percent.uncertainty_range[1]
+        - ninety_nine_percent.uncertainty_range[0]
+    )
+    assert ninety_nine_width > ninety_width
+
+
 def test_default_pipeline_dependencies_keep_optional_adapters_unloaded():
     calls = 0
 
