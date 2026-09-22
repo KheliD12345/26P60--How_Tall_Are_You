@@ -17,6 +17,12 @@ from height_estimation.models import (
     MarkerPairGeometry,
     PersonEndpoints,
 )
+from height_estimation.body_detection import (
+    MediaPipeHandDetectorAdapter,
+    MediaPipeSegmentationAdapter,
+    VGGHeadsDetectorAdapter,
+    ViTPoseDetectorAdapter,
+)
 from height_estimation.pipeline import (
     PipelineFailure,
     PipelineRunResult,
@@ -290,6 +296,60 @@ def test_cli_full_pipeline_writes_measurement_json(tmp_path, monkeypatch, capsys
     assert calls[0].confidence_level == 0.9
     assert calls[0].use_person_fallback is False
     assert "Wrote measurement result" in capsys.readouterr().out
+
+
+def test_cli_model_detectors_selects_lazy_adapters(tmp_path, monkeypatch):
+    calibration = make_calibration_result(())
+    image_path = tmp_path / "person.jpg"
+    image_path.write_bytes(b"image")
+    configurations = []
+
+    class FakePipeline:
+        def __init__(self, *, config):
+            configurations.append(config)
+
+        def run(self, pipeline_input):
+            del pipeline_input
+            return make_pipeline_result(calibration)
+
+    monkeypatch.setattr("height_estimation.cli.MeasurementPipeline", FakePipeline)
+
+    assert main(["--pipeline", "--model-detectors", str(image_path)]) == 0
+
+    configuration = configurations[0].body_detection
+    assert isinstance(configuration.pose_detector, ViTPoseDetectorAdapter)
+    assert isinstance(configuration.head_detector, VGGHeadsDetectorAdapter)
+    assert isinstance(
+        configuration.segmentation_detector,
+        MediaPipeSegmentationAdapter,
+    )
+    assert isinstance(configuration.hand_detector, MediaPipeHandDetectorAdapter)
+    assert configuration.pose_detector.lazy_detector.loaded is False
+    assert configuration.head_detector.lazy_detector.loaded is False
+    assert configuration.segmentation_detector.lazy_detector.loaded is False
+    assert configuration.hand_detector.lazy_detector.loaded is False
+
+
+def test_cli_calibration_mode_does_not_construct_model_detectors(
+    tmp_path,
+    monkeypatch,
+):
+    image_path = tmp_path / "markers.jpg"
+    image_path.write_bytes(b"image")
+    monkeypatch.setattr(
+        "height_estimation.cli.calibrate_image",
+        lambda image, layout: make_calibration_result(()),
+    )
+
+    def fail_if_constructed():
+        raise AssertionError("model detectors were constructed in calibration mode")
+
+    monkeypatch.setattr(
+        "height_estimation.cli.model_backed_body_detection_config",
+        fail_if_constructed,
+    )
+
+    assert main([str(image_path)]) == 0
 
 
 def test_cli_full_pipeline_reuses_calibration_for_overlay(tmp_path, monkeypatch):

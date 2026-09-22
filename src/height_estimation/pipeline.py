@@ -33,6 +33,7 @@ from .body_detection import (
 from .calibration import calibrate_image
 from .estimators import estimate_independent_heights
 from .fusion import build_measurement_result
+from .geometry import transform_person_endpoints, transform_point
 from .models import CalibrationResult, CameraCalibration, MarkerLayout
 from .quality import AcquisitionQualityGate
 
@@ -347,6 +348,33 @@ class _BodyDetectionStage:
 
 
 class _EstimationStage:
+    @staticmethod
+    def _metric_endpoints(
+        detections: BodyDetections,
+        homography: tuple[tuple[float, float, float], ...],
+        image_size: tuple[int, int],
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        head = detections.head_top or detections.keypoints.get("head_top")
+        heels = detections.heel_landmarks()
+        if head is None or not heels:
+            return None
+
+        height, width = image_size
+
+        def pixel_point(landmark):
+            return landmark.to_pixel(width, height)
+
+        try:
+            head_point = transform_point(pixel_point(head), homography)
+            heel_points = [
+                transform_point(pixel_point(landmark), homography)
+                for landmark in heels
+            ]
+        except (TypeError, ValueError, cv2.error):
+            return None
+        heel_point = max(heel_points, key=lambda point: point[1])
+        return head_point, heel_point
+
     def run(
         self,
         detections: BodyDetections,
@@ -355,10 +383,31 @@ class _EstimationStage:
         quality: QualityAssessment,
         image_size: tuple[int, int],
     ) -> Sequence[HeightEstimate]:
+        metric_endpoints = self._metric_endpoints(
+            detections,
+            calibration.homography.matrix,
+            image_size,
+        )
+        if metric_endpoints is None and calibration.person is not None:
+            try:
+                candidate = transform_person_endpoints(
+                    calibration.person,
+                    calibration.homography.matrix,
+                )
+            except (ValueError, cv2.error):
+                candidate = None
+            if candidate is not None and all(
+                isfinite(value)
+                for point in candidate
+                for value in point
+            ) and abs(candidate[1][1] - candidate[0][1]) > 1e-6:
+                metric_endpoints = candidate
+
         return estimate_independent_heights(
             detections,
             cm_per_pixel=calibration.cm_per_pixel,
             image_size=image_size,
+            metric_endpoints=metric_endpoints,
             quality=quality,
         )
 
