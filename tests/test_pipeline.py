@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -14,9 +16,15 @@ from height_estimation.advanced_models import (
     QualityMetrics,
 )
 from height_estimation.body_detection import (
+    BodyDetectionConfig,
     BodyDetectionResult,
     DetectionStatus,
     DetectorResult,
+    MediaPipeHandDetectorAdapter,
+    MediaPipeSegmentationAdapter,
+    PoseDetectorAdapter,
+    VGGHeadsDetectorAdapter,
+    ViTPoseDetectorAdapter,
 )
 from height_estimation.models import CalibrationResult, MarkerLayout, MarkerPosition
 from height_estimation.fusion import build_measurement_result
@@ -37,6 +45,7 @@ from height_estimation.pipeline import (
     PipelineStatus,
     QualityStage,
     MeasurementPipeline,
+    default_pipeline_dependencies,
 )
 
 
@@ -127,6 +136,57 @@ def test_pipeline_input_normalises_paths_and_preserves_calibration_option():
 def test_pipeline_config_rejects_invalid_values(kwargs, message):
     with pytest.raises(ValueError, match=message):
         PipelineConfig(**kwargs)
+
+
+def test_pipeline_config_rejects_invalid_body_detection_configuration():
+    with pytest.raises(TypeError, match="BodyDetectionConfig"):
+        PipelineConfig(body_detection=object())
+
+
+def test_default_pipeline_dependencies_propagate_body_detection_configuration():
+    pose = PoseDetectorAdapter(
+        lambda image: {"keypoints": {"left_hip": (0.4, 0.5)}}
+    )
+    configuration = BodyDetectionConfig(pose_detector=pose)
+    dependencies = default_pipeline_dependencies(
+        PipelineConfig(
+            body_detection=configuration,
+            use_person_fallback=False,
+        )
+    )
+
+    result = dependencies.body_detection.run(
+        np.zeros((20, 20, 3), dtype=np.uint8)
+    )
+
+    assert result.status is DetectionStatus.PARTIAL
+    assert result.detections.keypoints["left_hip"].x == 0.4
+    assert result.detector_results["head"].status is DetectionStatus.UNAVAILABLE
+
+
+def test_default_pipeline_dependencies_keep_optional_adapters_unloaded():
+    calls = 0
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return lambda image: {"keypoints": {"left_hip": (0.4, 0.5)}}
+
+    adapter = ViTPoseDetectorAdapter(factory)
+    dependencies = default_pipeline_dependencies(
+        PipelineConfig(
+            body_detection=BodyDetectionConfig(pose_detector=adapter),
+            use_person_fallback=False,
+        )
+    )
+
+    assert calls == 0
+    result = dependencies.body_detection.run(
+        np.zeros((20, 20, 3), dtype=np.uint8)
+    )
+
+    assert result.success is True
+    assert calls == 1
 
 
 def test_pipeline_config_requires_directory_for_intermediate_outputs(tmp_path):
@@ -601,3 +661,222 @@ def test_measurement_pipeline_reports_fusion_failure(tmp_path):
 
     assert error.value.code is PipelineFailureCode.FUSION_FAILED
     assert error.value.stage is PipelineStage.FUSION
+
+
+def test_default_pipeline_dependencies_merge_optional_adapter_outputs():
+    mask = np.zeros((12, 10), dtype=np.uint8)
+    mask[1:9, 3:7] = 1
+    constructions = {
+        "pose": 0,
+        "head": 0,
+        "segmentation": 0,
+        "hands": 0,
+    }
+
+    class StubPoseDetector:
+        def detect(self, image):
+            return {
+                "shoulder_width": {
+                    "landmark_11": {"x": 0.3, "y": 0.2, "visibility": 0.9},
+                    "landmark_12": {"x": 0.7, "y": 0.2, "visibility": 0.9},
+                },
+                "upper_leg_length": {
+                    "left": {
+                        "landmark_23": {"x": 0.38, "y": 0.55},
+                        "landmark_25": {"x": 0.38, "y": 0.72},
+                    },
+                    "right": {
+                        "landmark_24": {"x": 0.62, "y": 0.55},
+                        "landmark_26": {"x": 0.62, "y": 0.72},
+                    },
+                },
+                "lower_leg_length": {
+                    "left": {
+                        "landmark_25": {"x": 0.38, "y": 0.72},
+                        "landmark_27": {"x": 0.38, "y": 0.9},
+                    },
+                    "right": {
+                        "landmark_26": {"x": 0.62, "y": 0.72},
+                        "landmark_28": {"x": 0.62, "y": 0.9},
+                    },
+                },
+                "heel_landmarks": {
+                    "left": {"x": 0.38, "y": 0.95, "confidence": 0.8},
+                    "right": {"x": 0.62, "y": 0.95, "confidence": 0.8},
+                },
+            }
+
+    class StubHeadDetector:
+        def detect(self, image):
+            return {
+                "head_detected": True,
+                "head_bbox_pixels": {
+                    "x1": 18,
+                    "y1": 6,
+                    "x2": 30,
+                    "y2": 20,
+                },
+                "head_top_y_pixels": 5,
+                "confidence": 0.88,
+            }
+
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            assert return_mask is True
+            return {
+                "hair_length": {
+                    "top": {"y": 0.08},
+                    "bottom": {"y": 0.32},
+                },
+                "mask": mask,
+            }
+
+    class StubHandDetector:
+        def detect(self, image):
+            return {
+                "hands": [
+                    {
+                        "handedness": "Left",
+                        "confidence": 0.83,
+                        "hand_length": {
+                            "landmark_0": {"x": 0.2, "y": 0.65},
+                            "landmark_12": {"x": 0.25, "y": 0.55},
+                        },
+                    },
+                    {
+                        "handedness": "Right",
+                        "confidence": 0.81,
+                        "hand_length": {
+                            "landmark_0": {"x": 0.8, "y": 0.65},
+                            "landmark_12": {"x": 0.75, "y": 0.55},
+                        },
+                    },
+                ]
+            }
+
+    def pose_factory():
+        constructions["pose"] += 1
+        return StubPoseDetector()
+
+    def head_factory():
+        constructions["head"] += 1
+        return StubHeadDetector()
+
+    def segmentation_factory():
+        constructions["segmentation"] += 1
+        return StubSegmenter()
+
+    def hand_factory():
+        constructions["hands"] += 1
+        return StubHandDetector()
+
+    config = PipelineConfig(
+        use_person_fallback=False,
+        body_detection=BodyDetectionConfig(
+            pose_detector=ViTPoseDetectorAdapter(pose_factory),
+            head_detector=VGGHeadsDetectorAdapter(head_factory),
+            segmentation_detector=MediaPipeSegmentationAdapter(segmentation_factory),
+            hand_detector=MediaPipeHandDetectorAdapter(hand_factory),
+        ),
+    )
+    dependencies = default_pipeline_dependencies(config)
+    image = np.zeros((64, 48, 3), dtype=np.uint8)
+
+    first = dependencies.body_detection.run(image)
+    second = dependencies.body_detection.run(image)
+
+    assert first.status is DetectionStatus.SUCCESS
+    assert second.status is DetectionStatus.SUCCESS
+    assert constructions == {
+        "pose": 1,
+        "head": 1,
+        "segmentation": 1,
+        "hands": 1,
+    }
+    assert first.detections.keypoints["left_hip"].coordinate_system == "normalized"
+    assert first.detections.keypoints["right_heel"].y == pytest.approx(0.95)
+    assert first.detections.head_bbox == (18.0, 6.0, 30.0, 20.0)
+    assert first.detections.head_top.coordinate_system == "pixel"
+    assert first.detections.head_bottom.coordinate_system == "pixel"
+    assert np.array_equal(first.detections.segmentation_mask, mask)
+    assert first.detections.hair_top.y == pytest.approx(0.08)
+    assert first.detections.handedness == ("left", "right")
+    assert first.detections.hand_confidences == (0.83, 0.81)
+    assert first.detector_results["segmentation"].metadata["mask_shape"] == (12, 10)
+    assert first.detector_results["hands"].metadata["hand_count"] == 2
+
+
+def test_default_pipeline_dependencies_preserve_partial_optional_failures():
+    class StubPoseDetector:
+        def detect(self, image):
+            return {
+                "keypoints": {
+                    "left_hip": {"x": 0.4, "y": 0.5},
+                    "left_heel": {"x": 0.4, "y": 0.95},
+                }
+            }
+
+    class BrokenHeadDetector:
+        def detect(self, image):
+            raise RuntimeError("head model runtime failure")
+
+    class PerspectiveHandDetector:
+        def detect(self, image):
+            return {
+                "handedness_convention": "image",
+                "hands": [
+                    {
+                        "handedness": "Left",
+                        "hand_length": ((0.2, 0.6), (0.24, 0.5)),
+                    }
+                ],
+            }
+
+    config = PipelineConfig(
+        use_person_fallback=False,
+        body_detection=BodyDetectionConfig(
+            pose_detector=ViTPoseDetectorAdapter(lambda: StubPoseDetector()),
+            head_detector=VGGHeadsDetectorAdapter(lambda: BrokenHeadDetector()),
+            segmentation_detector=MediaPipeSegmentationAdapter(
+                module_name="height_estimation._missing_optional_segmenter"
+            ),
+            hand_detector=MediaPipeHandDetectorAdapter(lambda: PerspectiveHandDetector()),
+        ),
+    )
+    dependencies = default_pipeline_dependencies(config)
+
+    result = dependencies.body_detection.run(np.zeros((32, 24, 3), dtype=np.uint8))
+
+    assert result.status is DetectionStatus.PARTIAL
+    assert result.success is True
+    assert "left_hip" in result.detections.keypoints
+    assert result.detector_results["pose"].status is DetectionStatus.SUCCESS
+    assert result.detector_results["head"].status is DetectionStatus.FAILED
+    assert result.detector_results["segmentation"].status is DetectionStatus.UNAVAILABLE
+    assert result.detector_results["hands"].status is DetectionStatus.FAILED
+    assert any("runtime failure" in item for item in result.diagnostics)
+    assert any("missing_optional_segmenter" in item for item in result.diagnostics)
+    assert any("image-perspective" in item for item in result.diagnostics)
+
+
+def test_body_detection_import_does_not_load_optional_backends():
+    script = "\n".join(
+        [
+            "import json",
+            "import sys",
+            "import height_estimation.body_detection",
+            "heavy_roots = {'mediapipe', 'torch', 'torchvision', 'easy_ViTPose', 'huggingface_hub'}",
+            "loaded = sorted(name for name in sys.modules if name.split('.')[0] in heavy_roots)",
+            "print(json.dumps(loaded))",
+        ]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    loaded_modules = json.loads(completed.stdout.strip() or "[]")
+
+    assert loaded_modules == []
