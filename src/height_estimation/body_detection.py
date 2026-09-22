@@ -15,6 +15,7 @@ import numpy as np
 
 from .advanced_models import BodyDetections, Landmark
 from .models import PersonEndpoints
+from .optional_detectors import LazyDetector, OptionalDetectorUnavailable
 from .person import detect_person_endpoints
 
 
@@ -740,6 +741,12 @@ class _NormalisingAdapter:
     ) -> DetectorResult:
         try:
             raw = self._run(image)
+        except OptionalDetectorUnavailable as error:
+            return DetectorResult(
+                self.name,
+                DetectionStatus.UNAVAILABLE,
+                diagnostics=(f"{self.name} is unavailable: {error}",),
+            )
         except ImportError as error:
             return DetectorResult(
                 self.name,
