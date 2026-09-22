@@ -124,7 +124,7 @@ def test_head_bbox_estimator_supports_normalized_bbox():
 
     assert estimate is not None
     assert estimate.method is MeasurementMethod.HEAD_BBOX
-    assert estimate.height_cm == pytest.approx(40.0)
+    assert estimate.height_cm == pytest.approx(40.0 / 0.13)
     assert estimate.metadata["approximation"] is True
     assert 0.0 <= estimate.confidence <= 1.0
 
@@ -143,7 +143,7 @@ def test_head_bbox_estimator_prefers_explicit_head_landmarks():
     )
 
     assert estimate is not None
-    assert estimate.height_cm == pytest.approx(30.0)
+    assert estimate.height_cm == pytest.approx(30.0 / 0.13)
     assert estimate.metadata["approximation"] is False
 
 
