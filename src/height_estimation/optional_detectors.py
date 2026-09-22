@@ -62,8 +62,15 @@ class LazyDetector:
         return self._instance
 
     def detect(self, image: object) -> object:
+        return self.invoke("detect", image)
+
+    def invoke(self, method_name: str, *args: object, **kwargs: object) -> object:
         detector = self._load()
-        detect = getattr(detector, "detect", detector)
-        if not callable(detect):
-            raise TypeError(f"{self.name} must expose a callable detect method")
-        return detect(image)
+        method = getattr(detector, method_name, None)
+        if method is None and method_name == "detect":
+            method = detector
+        if not callable(method):
+            raise TypeError(
+                f"{self.name} must expose a callable {method_name} method"
+            )
+        return method(*args, **kwargs)
