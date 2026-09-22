@@ -98,6 +98,37 @@ def test_adds_person_endpoint_annotations(tmp_path):
     assert np.any(without_person != with_person)
 
 
+def test_overlay_reuses_calibration_working_image(tmp_path, monkeypatch):
+    image_path = tmp_path / "image.png"
+    output_path = tmp_path / "overlay.png"
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+    calibration = make_calibration()
+    working_image = np.full((100, 100, 3), 7, dtype=np.uint8)
+    calibration = CalibrationResult(
+        markers=calibration.markers,
+        geometry=calibration.geometry,
+        cm_per_pixel=calibration.cm_per_pixel,
+        homography=calibration.homography,
+        camera_calibration=object(),
+        working_image=working_image,
+    )
+
+    def fail_if_redistorted(*args):
+        raise AssertionError("working image was undistorted more than once")
+
+    monkeypatch.setattr(
+        "height_estimation.visualization.undistort_image",
+        fail_if_redistorted,
+    )
+
+    write_calibration_overlay(image_path, calibration, output_path)
+
+    overlay = cv2.imread(str(output_path))
+    assert overlay is not None
+    assert np.any(overlay == 7)
+
+
 def test_adds_perspective_height_annotation(tmp_path):
     image_path = tmp_path / "image.png"
     baseline_path = tmp_path / "baseline.png"

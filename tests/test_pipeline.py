@@ -26,7 +26,13 @@ from height_estimation.body_detection import (
     VGGHeadsDetectorAdapter,
     ViTPoseDetectorAdapter,
 )
-from height_estimation.models import CalibrationResult, MarkerLayout, MarkerPosition
+from height_estimation.models import (
+    CalibrationResult,
+    HomographyResult,
+    MarkerLayout,
+    MarkerPosition,
+    PersonEndpoints,
+)
 from height_estimation.fusion import build_measurement_result
 from height_estimation.pipeline import (
     PIPELINE_STAGE_ORDER,
@@ -164,6 +170,29 @@ def test_default_pipeline_dependencies_propagate_body_detection_configuration():
     assert result.detector_results["head"].status is DetectionStatus.UNAVAILABLE
 
 
+def test_default_pipeline_dependencies_propagate_confidence_level_to_fusion():
+    estimates = (
+        HeightEstimate(MeasurementMethod.GEOMETRIC, 165.0, 0.9),
+        HeightEstimate(MeasurementMethod.HEAD_BBOX, 175.0, 0.9),
+    )
+    ninety_percent = default_pipeline_dependencies(
+        PipelineConfig(confidence_level=0.90)
+    ).fusion.run(estimates, quality=make_quality())
+    ninety_nine_percent = default_pipeline_dependencies(
+        PipelineConfig(confidence_level=0.99)
+    ).fusion.run(estimates, quality=make_quality())
+
+    ninety_width = (
+        ninety_percent.uncertainty_range[1]
+        - ninety_percent.uncertainty_range[0]
+    )
+    ninety_nine_width = (
+        ninety_nine_percent.uncertainty_range[1]
+        - ninety_nine_percent.uncertainty_range[0]
+    )
+    assert ninety_nine_width > ninety_width
+
+
 def test_default_pipeline_dependencies_keep_optional_adapters_unloaded():
     calls = 0
 
@@ -187,6 +216,39 @@ def test_default_pipeline_dependencies_keep_optional_adapters_unloaded():
 
     assert result.success is True
     assert calls == 1
+
+
+def test_default_estimation_prefers_calibrated_metric_endpoints():
+    calibration = CalibrationResult(
+        markers=(),
+        geometry=(),
+        cm_per_pixel=0.1,
+        homography=HomographyResult(
+            matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+            reprojection_error_cm=0.0,
+        ),
+        person=PersonEndpoints(
+            box=(20, 20, 60, 160),
+            top_of_head=(50.0, 20.0),
+            bottom_of_feet=(50.0, 180.0),
+            score=1.0,
+        ),
+    )
+
+    estimates = default_pipeline_dependencies().estimation.run(
+        BodyDetections(),
+        calibration=calibration,
+        quality=make_quality(),
+        image_size=(200, 100),
+    )
+
+    assert len(estimates) == 1
+    assert estimates[0].height_cm == 160.0
+    assert estimates[0].metadata["coordinate_system"] == "metric_plane"
+    assert estimates[0].metadata["input_endpoints"] == [
+        [50.0, 20.0],
+        [50.0, 180.0],
+    ]
 
 
 def test_pipeline_config_requires_directory_for_intermediate_outputs(tmp_path):
@@ -351,6 +413,28 @@ def make_body_result(status=DetectionStatus.SUCCESS):
         },
         diagnostics=("fake body evidence",),
     )
+
+
+def test_default_quality_stage_consumes_body_keypoint_visibility():
+    image = np.zeros((80, 80), dtype=np.uint8)
+    image[::2, :] = 255
+    body = BodyDetectionResult(
+        detections=BodyDetections(
+            keypoints={"left_hip": (0.5, 0.5, 0.2)},
+        )
+    )
+
+    quality = default_pipeline_dependencies(PipelineConfig()).quality.run(
+        image,
+        calibration=make_calibration(),
+        body=body,
+    )
+
+    assert quality.metrics.blur_score == 1.0
+    assert quality.metrics.marker_visibility == 1.0
+    assert quality.metrics.occlusion_score == 0.2
+    assert not quality.passed
+    assert quality.recommendations == ("Body landmarks are partially occluded",)
 
 
 class RecordingCalibration:

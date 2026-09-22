@@ -131,7 +131,9 @@ class GeometricHeightEstimator:
 
 
 class HeadBoundingBoxHeightEstimator:
-    """Estimate head height from explicit endpoints or a head bounding box."""
+    """Estimate stature from head height and an anthropometric head ratio."""
+
+    HEAD_HEIGHT_RATIO = 0.13
 
     def estimate(
         self,
@@ -188,9 +190,12 @@ class HeadBoundingBoxHeightEstimator:
         else:
             return None
 
-        height_cm = _positive_height(
+        head_height_cm = _positive_height(
             abs(bottom_point[1] - top_point[1]) * cm_per_pixel
         )
+        if head_height_cm is None:
+            return None
+        height_cm = _positive_height(head_height_cm / self.HEAD_HEIGHT_RATIO)
         if height_cm is None:
             return None
 
@@ -214,6 +219,8 @@ class HeadBoundingBoxHeightEstimator:
                 "approximation": approximation,
                 "head_confidence": detections.head_confidence,
                 "completeness": completeness,
+                "head_height_cm": head_height_cm,
+                "head_height_ratio": self.HEAD_HEIGHT_RATIO,
             },
         )
 
