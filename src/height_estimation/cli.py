@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
+from .body_detection import model_backed_body_detection_config
 from .calibration import calibrate_image
 from .models import MarkerLayout
 from .pipeline import (
@@ -75,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-person-fallback",
         action="store_true",
         help="disable the optional HOG/GrabCut person fallback",
+    )
+    parser.add_argument(
+        "--model-detectors",
+        action="store_true",
+        help="enable optional pose, head, segmentation, and hand detectors",
     )
     return parser
 
@@ -159,6 +165,11 @@ def _run_pipeline_mode(args: argparse.Namespace, layout: MarkerLayout) -> int:
                 confidence_level=args.confidence_level,
                 use_person_fallback=not args.no_person_fallback,
                 output_path=output_path,
+                body_detection=(
+                    model_backed_body_detection_config()
+                    if args.model_detectors
+                    else None
+                ),
             )
             result = MeasurementPipeline(config=config).run(
                 PipelineInput(

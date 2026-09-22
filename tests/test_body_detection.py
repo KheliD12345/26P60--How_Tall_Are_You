@@ -5,14 +5,23 @@ import pytest
 
 from height_estimation.advanced_models import BodyDetections, Landmark
 from height_estimation.body_detection import (
+    BodyDetectionConfig,
     BodyDetectionResult,
     BodyDetectionOrchestrator,
     DetectionStatus,
     HandDetectorAdapter,
     HeadDetectorAdapter,
+    LazyHeadDetectorAdapter,
+    LazyHandDetectorAdapter,
+    LazyPoseDetectorAdapter,
+    LazySegmentationDetectorAdapter,
+    MediaPipeHandDetectorAdapter,
+    MediaPipeSegmentationAdapter,
     PersonFallbackAdapter,
     PoseDetectorAdapter,
     SegmentationDetectorAdapter,
+    VGGHeadsDetectorAdapter,
+    ViTPoseDetectorAdapter,
     UnavailableDetector,
     body_detections_from_person,
     build_body_detection_result,
@@ -23,6 +32,11 @@ from height_estimation.body_detection import (
     normalise_segmentation,
 )
 from height_estimation.models import PersonEndpoints
+from height_estimation.optional_detectors import (
+    LazyDetector,
+    OptionalDetectorUnavailable,
+    import_optional_module,
+)
 from height_estimation.quality import AcquisitionQualityGate
 
 
@@ -232,6 +246,185 @@ def test_hand_detector_adapter_reports_hand_count():
     assert result.metadata["hand_count"] == 1
 
 
+def test_mediapipe_segmentation_requests_full_mask_and_caches_segmenter():
+    mask = np.zeros((12, 9), dtype=np.uint8)
+    mask[2:8, 3:6] = 1
+    calls = []
+
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            calls.append((image.shape, return_mask))
+            return {
+                "hair_length": {
+                    "top": {"y": 0.2},
+                    "bottom": {"y": 0.7},
+                },
+                "mask": mask,
+            }
+
+    adapter = MediaPipeSegmentationAdapter(lambda: StubSegmenter())
+    image = np.zeros((20, 16, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == [((20, 16, 3), True), ((20, 16, 3), True)]
+    assert np.array_equal(first.detections.segmentation_mask, mask)
+    assert first.detections.hair_top == Landmark(0.5, 0.2)
+    assert first.detections.hair_bottom == Landmark(0.5, 0.7)
+    assert first.detections.hair_top.coordinate_system == "normalized"
+    assert first.metadata["mask_shape"] == (12, 9)
+    assert first.metadata["mask_coordinate_system"] == "pixel"
+    assert isinstance(adapter, LazySegmentationDetectorAdapter)
+
+
+def test_mediapipe_segmentation_preserves_nested_mask_payload():
+    mask = np.ones((5, 4), dtype=np.float32)
+
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            assert return_mask is True
+            return {
+                "segmentation": {
+                    "mask": mask,
+                    "hair_top": {"y": 0.1},
+                    "hair_bottom": {"y": 0.8},
+                }
+            }
+
+    result = MediaPipeSegmentationAdapter(lambda: StubSegmenter()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.SUCCESS
+    assert np.array_equal(result.detections.segmentation_mask, mask)
+    assert result.metadata["mask_coordinate_system"] == "pixel"
+
+
+def test_mediapipe_segmentation_empty_result_is_no_person():
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            assert return_mask is True
+            return {}
+
+    result = MediaPipeSegmentationAdapter(lambda: StubSegmenter()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.detections.segmentation_mask is None
+
+
+def test_mediapipe_segmentation_rejects_malformed_mask():
+    class StubSegmenter:
+        def segment(self, image, *, return_mask=False):
+            return {"mask": [["hair"]]}
+
+    result = MediaPipeSegmentationAdapter(lambda: StubSegmenter()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.FAILED
+    assert "numeric" in result.diagnostics[0]
+
+
+def test_mediapipe_segmentation_reports_missing_dependency_as_unavailable():
+    adapter = MediaPipeSegmentationAdapter(
+        module_name="height_estimation._missing_mediapipe_segmenter"
+    )
+
+    result = adapter.detect(np.zeros((10, 10, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.UNAVAILABLE
+    assert "missing_mediapipe_segmenter" in result.diagnostics[0]
+
+
+def test_mediapipe_hand_adapter_preserves_subject_relative_measurements():
+    calls = 0
+
+    class StubHandDetector:
+        def detect(self, image):
+            nonlocal calls
+            calls += 1
+            return {
+                "hands": [
+                    {
+                        "handedness": "Left",
+                        "confidence": 0.85,
+                        "hand_length": {
+                            "landmark_0": {"x": 0.2, "y": 0.6},
+                            "landmark_12": {"x": 0.25, "y": 0.5},
+                        },
+                        "all_landmarks": {},
+                    }
+                ]
+            }
+
+    adapter = MediaPipeHandDetectorAdapter(lambda: StubHandDetector())
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == 2
+    assert first.detections.handedness == ("left",)
+    assert first.detections.hand_confidences == (0.85,)
+    assert first.detections.hand_lengths[0] == (
+        Landmark(0.2, 0.6),
+        Landmark(0.25, 0.5),
+    )
+    assert isinstance(adapter, LazyHandDetectorAdapter)
+
+
+def test_mediapipe_hand_adapter_empty_result_is_no_person():
+    class StubHandDetector:
+        def detect(self, image):
+            return {"hands": []}
+
+    result = MediaPipeHandDetectorAdapter(lambda: StubHandDetector()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.detections.hand_lengths == ()
+
+
+def test_mediapipe_hand_adapter_rejects_image_perspective_labels():
+    class StubHandDetector:
+        def detect(self, image):
+            return {
+                "handedness_convention": "image",
+                "hands": [
+                    {
+                        "handedness": "Left",
+                        "hand_length": ((0.2, 0.6), (0.25, 0.5)),
+                    }
+                ],
+            }
+
+    result = MediaPipeHandDetectorAdapter(lambda: StubHandDetector()).detect(
+        np.zeros((10, 10, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.FAILED
+    assert "image-perspective" in result.diagnostics[0]
+
+
+def test_mediapipe_hand_adapter_reports_missing_model_dependency():
+    adapter = MediaPipeHandDetectorAdapter(
+        module_name="height_estimation._missing_mediapipe_hand_detector"
+    )
+
+    result = adapter.detect(np.zeros((10, 10, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.UNAVAILABLE
+    assert "missing_mediapipe_hand_detector" in result.diagnostics[0]
+
+
 def test_orchestrator_merges_stubbed_detectors_and_keeps_optional_statuses():
     orchestrator = BodyDetectionOrchestrator(
         pose_detector=lambda image: {
@@ -416,6 +609,194 @@ def test_optional_detector_is_explicitly_unavailable():
     assert result.status == DetectionStatus.UNAVAILABLE
     assert result.available is False
     assert "not installed" in result.diagnostics[0]
+
+
+def test_lazy_detector_constructs_once_on_first_use():
+    instances = []
+
+    class StubDetector:
+        def detect(self, image):
+            return {"keypoints": {"left_hip": (0.4, 0.5)}}
+
+    def factory():
+        detector = StubDetector()
+        instances.append(detector)
+        return detector
+
+    lazy = LazyDetector(factory, name="pose")
+    adapter = PoseDetectorAdapter(lazy)
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    assert lazy.loaded is False
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert len(instances) == 1
+    assert lazy.loaded is True
+
+
+def test_lazy_detector_maps_initialisation_failures_to_unavailable():
+    calls = 0
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        raise FileNotFoundError("model file is missing")
+
+    lazy = LazyDetector(factory, name="head")
+    adapter = HeadDetectorAdapter(lazy)
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.UNAVAILABLE
+    assert second.status == DetectionStatus.UNAVAILABLE
+    assert calls == 1
+    assert "model file is missing" in first.diagnostics[0]
+
+
+def test_optional_module_import_reports_missing_dependency():
+    with pytest.raises(OptionalDetectorUnavailable, match="unavailable"):
+        import_optional_module(
+            "height_estimation._missing_optional_detector_dependency"
+        )
+
+
+def test_vitpose_adapter_flattens_grouped_landmarks_and_caches_detector():
+    calls = 0
+
+    class StubPoseDetector:
+        def detect(self, image):
+            assert image.shape == (30, 20, 3)
+            return {
+                "shoulder_width": {
+                    "landmark_11": {"x": 0.3, "y": 0.2, "visibility": 0.8},
+                    "landmark_12": {"x": 0.7, "y": 0.2, "visibility": 0.9},
+                },
+                "upper_leg_length": {
+                    "left": {
+                        "landmark_23": {"x": 0.35, "y": 0.5},
+                        "landmark_25": {"x": 0.36, "y": 0.7},
+                    },
+                },
+                "heel_landmarks": {
+                    "left": {"x": 0.36, "y": 0.95, "confidence": 0.7},
+                },
+                "head_top": {"x": 0.5, "y": 0.1},
+            }
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return StubPoseDetector()
+
+    adapter = ViTPoseDetectorAdapter(factory)
+    image = np.zeros((30, 20, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == 1
+    assert first.detections.keypoints["left_shoulder"].visibility == 0.8
+    assert first.detections.keypoints["left_hip"].coordinate_system == "normalized"
+    assert first.detections.keypoints["left_heel"].visibility == 0.7
+    assert "head_top" not in first.detections.keypoints
+    assert isinstance(adapter, LazyPoseDetectorAdapter)
+
+
+def test_vitpose_adapter_keeps_empty_output_as_no_person():
+    result = ViTPoseDetectorAdapter(lambda: lambda image: {}).detect(
+        np.zeros((20, 20, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.detections.keypoints == {}
+
+
+def test_vitpose_adapter_rejects_malformed_grouped_landmarks():
+    adapter = ViTPoseDetectorAdapter(
+        lambda: lambda image: {
+            "upper_leg_length": {
+                "left": {"landmark_23": {"x": 0.4}},
+            }
+        }
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.FAILED
+    assert "malformed" in result.diagnostics[0]
+
+
+def test_vitpose_default_import_is_deferred():
+    adapter = ViTPoseDetectorAdapter(
+        module_name="height_estimation._missing_vitpose_module"
+    )
+
+    assert adapter.lazy_detector.loaded is False
+
+
+def test_vggheads_adapter_preserves_pixel_head_fields_and_caches_detector():
+    calls = 0
+
+    class StubHeadDetector:
+        def detect(self, image):
+            assert image.shape == (40, 30, 3)
+            return {
+                "head_detected": True,
+                "head_bbox": {"x1": 0.2, "y1": 0.1, "x2": 0.5, "y2": 0.3},
+                "head_bbox_pixels": {"x1": 6, "y1": 4, "x2": 15, "y2": 12},
+                "head_top_y": 0.08,
+                "head_top_y_pixels": 3,
+                "confidence": 0.91,
+            }
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return StubHeadDetector()
+
+    adapter = VGGHeadsDetectorAdapter(factory)
+    image = np.zeros((40, 30, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == 1
+    assert first.detections.head_bbox == (6.0, 4.0, 15.0, 12.0)
+    assert first.detections.head_top == Landmark(10.5, 3.0, normalized=False)
+    assert first.detections.head_bottom == Landmark(10.5, 12.0, normalized=False)
+    assert first.detections.head_confidence == 0.91
+    assert isinstance(adapter, LazyHeadDetectorAdapter)
+
+
+def test_vggheads_adapter_rejects_detected_head_without_bbox():
+    adapter = VGGHeadsDetectorAdapter(
+        lambda: lambda image: {"head_detected": True}
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.FAILED
+    assert "without a bounding box" in result.diagnostics[0]
+
+
+def test_vggheads_adapter_reports_missing_optional_module_as_unavailable():
+    adapter = VGGHeadsDetectorAdapter(
+        module_name="height_estimation._missing_vggheads_module"
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.UNAVAILABLE
+    assert "missing_vggheads_module" in result.diagnostics[0]
 
 
 def test_adapters_report_invalid_output_as_failure():

@@ -14,6 +14,28 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
+models = [
+    "mediapipe>=0.10.3",
+    "scipy>=1.10.0",
+    "easy_ViTPose @ git+https://github.com/JunkyByte/easy_ViTPose.git",
+    "ultralytics>=8.0.0",
+    "huggingface_hub>=0.20.0",
+    "scikit-image>=0.24.0",
+    "ffmpeg>=1.4",
+    "torch>=2.0.1",
+    "torchvision>=0.15.0",
+    "timm>=0.9.0",
+    "albumentations>=1.3.0",
+    "PyYAML>=6.0",
+    "tqdm>=4.65.0",
+    "scikit-learn>=1.3.0",
+    "Pillow>=9.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "filterpy>=1.4.5",
+    "dtaidistance>=2.3.0",
+    "reportlab==4.4.9",
+]
 
 [project.scripts]
 height-estimation = "height_estimation.cli:main"

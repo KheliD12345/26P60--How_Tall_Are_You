@@ -25,6 +25,7 @@ from .advanced_models import (
     QualityAssessment,
 )
 from .body_detection import (
+    BodyDetectionConfig,
     BodyDetectionOrchestrator,
     BodyDetectionResult,
     DetectionStatus,
@@ -106,6 +107,7 @@ class PipelineConfig:
     output_path: Path | None = None
     intermediate_output_dir: Path | None = None
     write_intermediate_outputs: bool = False
+    body_detection: BodyDetectionConfig | None = None
 
     def __post_init__(self) -> None:
         if self.quality_policy not in {"fail", "continue"}:
@@ -114,6 +116,11 @@ class PipelineConfig:
             raise ValueError("confidence level must be between zero and one")
         if not isinstance(self.use_person_fallback, bool):
             raise ValueError("use_person_fallback must be a boolean")
+        if self.body_detection is not None and not isinstance(
+            self.body_detection,
+            BodyDetectionConfig,
+        ):
+            raise TypeError("body_detection must be a BodyDetectionConfig")
         output_path = None if self.output_path is None else Path(self.output_path)
         intermediate_dir = (
             None
@@ -324,8 +331,14 @@ class _QualityStage:
 
 
 class _BodyDetectionStage:
-    def __init__(self, *, use_person_fallback: bool) -> None:
+    def __init__(
+        self,
+        *,
+        use_person_fallback: bool,
+        configuration: BodyDetectionConfig | None = None,
+    ) -> None:
         self.orchestrator = BodyDetectionOrchestrator(
+            configuration=configuration,
             use_person_fallback=use_person_fallback,
         )
 
@@ -376,6 +389,7 @@ def default_pipeline_dependencies(
         quality=_QualityStage(),
         body_detection=_BodyDetectionStage(
             use_person_fallback=pipeline_config.use_person_fallback,
+            configuration=pipeline_config.body_detection,
         ),
         estimation=_EstimationStage(),
         fusion=_FusionStage(
