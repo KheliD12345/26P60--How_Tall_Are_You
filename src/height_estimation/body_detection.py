@@ -15,7 +15,11 @@ import numpy as np
 
 from .advanced_models import BodyDetections, Landmark
 from .models import PersonEndpoints
-from .optional_detectors import LazyDetector, OptionalDetectorUnavailable
+from .optional_detectors import (
+    LazyDetector,
+    OptionalDetectorUnavailable,
+    import_optional_module,
+)
 from .person import detect_person_endpoints
 
 
@@ -838,6 +842,288 @@ class HeadDetectorAdapter(_NormalisingAdapter):
 
     def detect(self, image: np.ndarray) -> DetectorResult:
         return self._result(image, normalise_head_detection)
+
+
+_VITPOSE_INDEX_NAMES = {
+    "landmark_11": "left_shoulder",
+    "landmark_12": "right_shoulder",
+    "landmark_23": "left_hip",
+    "landmark_24": "right_hip",
+    "landmark_25": "left_knee",
+    "landmark_26": "right_knee",
+    "landmark_27": "left_ankle",
+    "landmark_28": "right_ankle",
+    "landmark_29": "left_heel",
+    "landmark_30": "right_heel",
+}
+
+_VITPOSE_GROUPS = {
+    "shoulder_width": {
+        "landmark_11": "left_shoulder",
+        "landmark_12": "right_shoulder",
+    },
+    "hip_width": {
+        "landmark_23": "left_hip",
+        "landmark_24": "right_hip",
+    },
+    "upper_leg_length": {
+        "landmark_23": "left_hip",
+        "landmark_25": "left_knee",
+        "landmark_24": "right_hip",
+        "landmark_26": "right_knee",
+    },
+    "lower_leg_length": {
+        "landmark_25": "left_knee",
+        "landmark_27": "left_ankle",
+        "landmark_26": "right_knee",
+        "landmark_28": "right_ankle",
+    },
+    "upper_arm_length": {
+        "landmark_11": "left_shoulder",
+        "landmark_13": "left_elbow",
+        "landmark_12": "right_shoulder",
+        "landmark_14": "right_elbow",
+    },
+    "forearm_length": {
+        "landmark_13": "left_elbow",
+        "landmark_15": "left_wrist",
+        "landmark_14": "right_elbow",
+        "landmark_16": "right_wrist",
+    },
+    "shoulder_to_waist": {
+        "landmark_11": "left_shoulder",
+        "landmark_23": "left_hip",
+        "landmark_12": "right_shoulder",
+        "landmark_24": "right_hip",
+    },
+}
+
+_VITPOSE_DIRECT_NAMES = {
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+    "left_heel",
+    "right_heel",
+    "nose",
+    "head",
+}
+
+
+def _is_landmark_record(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return "x" in value and "y" in value
+    if isinstance(value, (tuple, list)):
+        return len(value) >= 2
+    return hasattr(value, "x") and hasattr(value, "y")
+
+
+def _add_vitpose_landmark(
+    keypoints: dict[str, object],
+    name: str,
+    value: object,
+) -> None:
+    if value is None:
+        return
+    if not _is_landmark_record(value):
+        raise ValueError(f"ViTPose landmark {name} is malformed")
+    keypoints[name] = value
+
+
+def _flatten_vitpose_output(value: object) -> object:
+    if isinstance(value, BodyDetections):
+        return value
+    if not isinstance(value, Mapping):
+        raise ValueError("ViTPose output must be a mapping")
+
+    source = value.get("keypoints", value.get("landmarks", value))
+    if not isinstance(source, Mapping):
+        raise ValueError("ViTPose keypoints must be a mapping")
+
+    keypoints: dict[str, object] = {}
+    for raw_name, raw_value in source.items():
+        name = str(raw_name)
+        if name in _POSE_METADATA_KEYS or name in {"coordinate_system", "metadata"}:
+            continue
+        if name == "heel_landmarks":
+            if raw_value is None:
+                continue
+            if not isinstance(raw_value, Mapping):
+                raise ValueError("ViTPose heel_landmarks must be a mapping")
+            _add_vitpose_landmark(
+                keypoints,
+                "left_heel",
+                raw_value.get("left"),
+            )
+            _add_vitpose_landmark(
+                keypoints,
+                "right_heel",
+                raw_value.get("right"),
+            )
+            continue
+        if name in _VITPOSE_GROUPS:
+            if raw_value is None:
+                continue
+            if not isinstance(raw_value, Mapping):
+                raise ValueError(f"ViTPose group {name} must be a mapping")
+            group_names = _VITPOSE_GROUPS[name]
+            for source_name, target_name in group_names.items():
+                if source_name in raw_value:
+                    _add_vitpose_landmark(
+                        keypoints,
+                        target_name,
+                        raw_value[source_name],
+                    )
+            for side in ("left", "right"):
+                side_values = raw_value.get(side)
+                if side_values is None:
+                    continue
+                if not isinstance(side_values, Mapping):
+                    raise ValueError(
+                        f"ViTPose group {name}.{side} must be a mapping"
+                    )
+                for source_name, target_name in group_names.items():
+                    if source_name in side_values:
+                        _add_vitpose_landmark(
+                            keypoints,
+                            target_name,
+                            side_values[source_name],
+                        )
+            continue
+        target_name = _VITPOSE_INDEX_NAMES.get(name, name)
+        if name in _VITPOSE_INDEX_NAMES or name in _VITPOSE_DIRECT_NAMES:
+            _add_vitpose_landmark(keypoints, target_name, raw_value)
+
+    normalised: dict[str, Any] = {
+        "coordinate_system": "normalized",
+        "keypoints": keypoints,
+    }
+    if isinstance(value.get("metadata"), Mapping):
+        normalised["metadata"] = dict(value["metadata"])
+    return normalised
+
+
+def _optional_class_factory(
+    module_name: str,
+    class_name: str,
+    options: Mapping[str, Any],
+) -> Callable[[], object]:
+    def factory() -> object:
+        module = import_optional_module(module_name)
+        try:
+            detector_class = getattr(module, class_name)
+        except AttributeError as error:
+            raise OptionalDetectorUnavailable(
+                f"optional module {module_name!r} has no {class_name} detector"
+            ) from error
+        if not callable(detector_class):
+            raise OptionalDetectorUnavailable(
+                f"{class_name} is not a callable detector"
+            )
+        return detector_class(**dict(options))
+
+    return factory
+
+
+class ViTPoseDetectorAdapter(PoseDetectorAdapter):
+    """Lazily load and normalise a ViTPose-style grouped detector."""
+
+    def __init__(
+        self,
+        detector_factory: Callable[[], object] | None = None,
+        *,
+        model_name: str = "l",
+        yolo_model: str = "yolov8s",
+        device: str | None = None,
+        yolo_size: int = 320,
+        detector_options: Mapping[str, Any] | None = None,
+        module_name: str = "vitpose_detection.pose_detection",
+        detector_class_name: str = "PoseDetector",
+    ) -> None:
+        options: dict[str, Any] = {
+            "model_name": model_name,
+            "yolo_model": yolo_model,
+            "device": device,
+            "yolo_size": yolo_size,
+        }
+        if detector_options is not None:
+            options.update(detector_options)
+        factory = detector_factory or _optional_class_factory(
+            module_name,
+            detector_class_name,
+            options,
+        )
+        self.lazy_detector = LazyDetector(factory, name="pose")
+        super().__init__(self.lazy_detector)
+
+    def _run(self, image: np.ndarray) -> object:
+        raw = self.lazy_detector.detect(image)
+        if isinstance(raw, Mapping) and (
+            raw.get("status") in {
+                DetectionStatus.UNAVAILABLE.value,
+                DetectionStatus.FAILED.value,
+            }
+            or raw.get("success") is False
+        ):
+            return raw
+        return _flatten_vitpose_output(raw)
+
+
+class VGGHeadsDetectorAdapter(HeadDetectorAdapter):
+    """Lazily load and normalise a VGGHeads-style head detector."""
+
+    def __init__(
+        self,
+        detector_factory: Callable[[], object] | None = None,
+        *,
+        model: str = "vgg_heads_l",
+        conf_threshold: float = 0.5,
+        detector_options: Mapping[str, Any] | None = None,
+        module_name: str = "vggheads_detection.head_detection",
+        detector_class_name: str = "HeadDetector",
+    ) -> None:
+        options: dict[str, Any] = {
+            "model": model,
+            "conf_threshold": conf_threshold,
+        }
+        if detector_options is not None:
+            options.update(detector_options)
+        factory = detector_factory or _optional_class_factory(
+            module_name,
+            detector_class_name,
+            options,
+        )
+        self.lazy_detector = LazyDetector(factory, name="head")
+        super().__init__(self.lazy_detector)
+
+    def _run(self, image: np.ndarray) -> object:
+        raw = self.lazy_detector.detect(image)
+        if isinstance(raw, Mapping):
+            if raw.get("status") in {
+                DetectionStatus.UNAVAILABLE.value,
+                DetectionStatus.FAILED.value,
+            } or raw.get("success") is False:
+                return raw
+            has_bbox = raw.get("head_bbox") is not None or raw.get(
+                "head_bbox_pixels"
+            ) is not None
+            if raw.get("head_detected") is True and not has_bbox:
+                raise ValueError(
+                    "VGGHeads output marks a head as detected without a bounding box"
+                )
+        return raw
+
+
+LazyPoseDetectorAdapter = ViTPoseDetectorAdapter
+LazyHeadDetectorAdapter = VGGHeadsDetectorAdapter
 
 
 class SegmentationDetectorAdapter(_NormalisingAdapter):

@@ -10,9 +10,13 @@ from height_estimation.body_detection import (
     DetectionStatus,
     HandDetectorAdapter,
     HeadDetectorAdapter,
+    LazyHeadDetectorAdapter,
+    LazyPoseDetectorAdapter,
     PersonFallbackAdapter,
     PoseDetectorAdapter,
     SegmentationDetectorAdapter,
+    VGGHeadsDetectorAdapter,
+    ViTPoseDetectorAdapter,
     UnavailableDetector,
     body_detections_from_person,
     build_body_detection_result,
@@ -475,6 +479,140 @@ def test_optional_module_import_reports_missing_dependency():
         import_optional_module(
             "height_estimation._missing_optional_detector_dependency"
         )
+
+
+def test_vitpose_adapter_flattens_grouped_landmarks_and_caches_detector():
+    calls = 0
+
+    class StubPoseDetector:
+        def detect(self, image):
+            assert image.shape == (30, 20, 3)
+            return {
+                "shoulder_width": {
+                    "landmark_11": {"x": 0.3, "y": 0.2, "visibility": 0.8},
+                    "landmark_12": {"x": 0.7, "y": 0.2, "visibility": 0.9},
+                },
+                "upper_leg_length": {
+                    "left": {
+                        "landmark_23": {"x": 0.35, "y": 0.5},
+                        "landmark_25": {"x": 0.36, "y": 0.7},
+                    },
+                },
+                "heel_landmarks": {
+                    "left": {"x": 0.36, "y": 0.95, "confidence": 0.7},
+                },
+                "head_top": {"x": 0.5, "y": 0.1},
+            }
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return StubPoseDetector()
+
+    adapter = ViTPoseDetectorAdapter(factory)
+    image = np.zeros((30, 20, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == 1
+    assert first.detections.keypoints["left_shoulder"].visibility == 0.8
+    assert first.detections.keypoints["left_hip"].coordinate_system == "normalized"
+    assert first.detections.keypoints["left_heel"].visibility == 0.7
+    assert "head_top" not in first.detections.keypoints
+    assert isinstance(adapter, LazyPoseDetectorAdapter)
+
+
+def test_vitpose_adapter_keeps_empty_output_as_no_person():
+    result = ViTPoseDetectorAdapter(lambda: lambda image: {}).detect(
+        np.zeros((20, 20, 3), dtype=np.uint8)
+    )
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.detections.keypoints == {}
+
+
+def test_vitpose_adapter_rejects_malformed_grouped_landmarks():
+    adapter = ViTPoseDetectorAdapter(
+        lambda: lambda image: {
+            "upper_leg_length": {
+                "left": {"landmark_23": {"x": 0.4}},
+            }
+        }
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.FAILED
+    assert "malformed" in result.diagnostics[0]
+
+
+def test_vitpose_default_import_is_deferred():
+    adapter = ViTPoseDetectorAdapter(
+        module_name="height_estimation._missing_vitpose_module"
+    )
+
+    assert adapter.lazy_detector.loaded is False
+
+
+def test_vggheads_adapter_preserves_pixel_head_fields_and_caches_detector():
+    calls = 0
+
+    class StubHeadDetector:
+        def detect(self, image):
+            assert image.shape == (40, 30, 3)
+            return {
+                "head_detected": True,
+                "head_bbox": {"x1": 0.2, "y1": 0.1, "x2": 0.5, "y2": 0.3},
+                "head_bbox_pixels": {"x1": 6, "y1": 4, "x2": 15, "y2": 12},
+                "head_top_y": 0.08,
+                "head_top_y_pixels": 3,
+                "confidence": 0.91,
+            }
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return StubHeadDetector()
+
+    adapter = VGGHeadsDetectorAdapter(factory)
+    image = np.zeros((40, 30, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == 1
+    assert first.detections.head_bbox == (6.0, 4.0, 15.0, 12.0)
+    assert first.detections.head_top == Landmark(10.5, 3.0, normalized=False)
+    assert first.detections.head_bottom == Landmark(10.5, 12.0, normalized=False)
+    assert first.detections.head_confidence == 0.91
+    assert isinstance(adapter, LazyHeadDetectorAdapter)
+
+
+def test_vggheads_adapter_rejects_detected_head_without_bbox():
+    adapter = VGGHeadsDetectorAdapter(
+        lambda: lambda image: {"head_detected": True}
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.FAILED
+    assert "without a bounding box" in result.diagnostics[0]
+
+
+def test_vggheads_adapter_reports_missing_optional_module_as_unavailable():
+    adapter = VGGHeadsDetectorAdapter(
+        module_name="height_estimation._missing_vggheads_module"
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.UNAVAILABLE
+    assert "missing_vggheads_module" in result.diagnostics[0]
 
 
 def test_adapters_report_invalid_output_as_failure():
