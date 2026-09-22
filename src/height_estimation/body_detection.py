@@ -31,6 +31,16 @@ class DetectionStatus(str, Enum):
     PARTIAL = "partial"
 
 
+@dataclass(frozen=True)
+class BodyDetectionConfig:
+    """Explicit optional detector configuration for body detection."""
+
+    pose_detector: object | None = None
+    head_detector: object | None = None
+    segmentation_detector: object | None = None
+    hand_detector: object | None = None
+
+
 class ImageDetector(Protocol):
     def detect(self, image: np.ndarray) -> object:
         """Return detector-specific output for one BGR image."""
@@ -1371,20 +1381,40 @@ class BodyDetectionOrchestrator:
     def __init__(
         self,
         *,
+        configuration: BodyDetectionConfig | None = None,
         pose_detector: object | None = None,
         head_detector: object | None = None,
         segmentation_detector: object | None = None,
         hand_detector: object | None = None,
         use_person_fallback: bool = True,
     ) -> None:
+        if configuration is not None and not isinstance(
+            configuration,
+            BodyDetectionConfig,
+        ):
+            raise TypeError("body detection configuration is invalid")
+        configuration = configuration or BodyDetectionConfig()
         self.detectors = {
-            "pose": _adapt_detector("pose", pose_detector),
-            "head": _adapt_detector("head", head_detector),
+            "pose": _adapt_detector(
+                "pose",
+                pose_detector if pose_detector is not None else configuration.pose_detector,
+            ),
+            "head": _adapt_detector(
+                "head",
+                head_detector if head_detector is not None else configuration.head_detector,
+            ),
             "segmentation": _adapt_detector(
                 "segmentation",
-                segmentation_detector,
+                (
+                    segmentation_detector
+                    if segmentation_detector is not None
+                    else configuration.segmentation_detector
+                ),
             ),
-            "hands": _adapt_detector("hands", hand_detector),
+            "hands": _adapt_detector(
+                "hands",
+                hand_detector if hand_detector is not None else configuration.hand_detector,
+            ),
         }
         if use_person_fallback:
             self.detectors["person_fallback"] = PersonFallbackAdapter()

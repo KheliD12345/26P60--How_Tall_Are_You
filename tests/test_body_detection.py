@@ -5,6 +5,7 @@ import pytest
 
 from height_estimation.advanced_models import BodyDetections, Landmark
 from height_estimation.body_detection import (
+    BodyDetectionConfig,
     BodyDetectionResult,
     BodyDetectionOrchestrator,
     DetectionStatus,

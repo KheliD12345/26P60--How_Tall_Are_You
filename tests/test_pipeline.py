@@ -14,9 +14,12 @@ from height_estimation.advanced_models import (
     QualityMetrics,
 )
 from height_estimation.body_detection import (
+    BodyDetectionConfig,
     BodyDetectionResult,
     DetectionStatus,
     DetectorResult,
+    PoseDetectorAdapter,
+    ViTPoseDetectorAdapter,
 )
 from height_estimation.models import CalibrationResult, MarkerLayout, MarkerPosition
 from height_estimation.fusion import build_measurement_result
@@ -37,6 +40,7 @@ from height_estimation.pipeline import (
     PipelineStatus,
     QualityStage,
     MeasurementPipeline,
+    default_pipeline_dependencies,
 )
 
 
@@ -127,6 +131,57 @@ def test_pipeline_input_normalises_paths_and_preserves_calibration_option():
 def test_pipeline_config_rejects_invalid_values(kwargs, message):
     with pytest.raises(ValueError, match=message):
         PipelineConfig(**kwargs)
+
+
+def test_pipeline_config_rejects_invalid_body_detection_configuration():
+    with pytest.raises(TypeError, match="BodyDetectionConfig"):
+        PipelineConfig(body_detection=object())
+
+
+def test_default_pipeline_dependencies_propagate_body_detection_configuration():
+    pose = PoseDetectorAdapter(
+        lambda image: {"keypoints": {"left_hip": (0.4, 0.5)}}
+    )
+    configuration = BodyDetectionConfig(pose_detector=pose)
+    dependencies = default_pipeline_dependencies(
+        PipelineConfig(
+            body_detection=configuration,
+            use_person_fallback=False,
+        )
+    )
+
+    result = dependencies.body_detection.run(
+        np.zeros((20, 20, 3), dtype=np.uint8)
+    )
+
+    assert result.status is DetectionStatus.PARTIAL
+    assert result.detections.keypoints["left_hip"].x == 0.4
+    assert result.detector_results["head"].status is DetectionStatus.UNAVAILABLE
+
+
+def test_default_pipeline_dependencies_keep_optional_adapters_unloaded():
+    calls = 0
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return lambda image: {"keypoints": {"left_hip": (0.4, 0.5)}}
+
+    adapter = ViTPoseDetectorAdapter(factory)
+    dependencies = default_pipeline_dependencies(
+        PipelineConfig(
+            body_detection=BodyDetectionConfig(pose_detector=adapter),
+            use_person_fallback=False,
+        )
+    )
+
+    assert calls == 0
+    result = dependencies.body_detection.run(
+        np.zeros((20, 20, 3), dtype=np.uint8)
+    )
+
+    assert result.success is True
+    assert calls == 1
 
 
 def test_pipeline_config_requires_directory_for_intermediate_outputs(tmp_path):
