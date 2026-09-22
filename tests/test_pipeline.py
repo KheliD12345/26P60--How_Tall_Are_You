@@ -415,6 +415,28 @@ def make_body_result(status=DetectionStatus.SUCCESS):
     )
 
 
+def test_default_quality_stage_consumes_body_keypoint_visibility():
+    image = np.zeros((80, 80), dtype=np.uint8)
+    image[::2, :] = 255
+    body = BodyDetectionResult(
+        detections=BodyDetections(
+            keypoints={"left_hip": (0.5, 0.5, 0.2)},
+        )
+    )
+
+    quality = default_pipeline_dependencies(PipelineConfig()).quality.run(
+        image,
+        calibration=make_calibration(),
+        body=body,
+    )
+
+    assert quality.metrics.blur_score == 1.0
+    assert quality.metrics.marker_visibility == 1.0
+    assert quality.metrics.occlusion_score == 0.2
+    assert not quality.passed
+    assert quality.recommendations == ("Body landmarks are partially occluded",)
+
+
 class RecordingCalibration:
     def __init__(self, events):
         self.events = events
