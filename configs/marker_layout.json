@@ -1,10 +1,10 @@
 {
   "dictionary": "DICT_4X4_50",
-  "marker_size_cm": 18.0,
+  "marker_size_cm": 16.4,
   "markers": [
-    {"id": 0, "name": "top_left", "x_cm": 0.0, "y_cm": 169},
-    {"id": 1, "name": "top_right", "x_cm": 105.3, "y_cm": 169},
-    {"id": 2, "name": "bottom_left", "x_cm": 0.0, "y_cm": 0.0},
-    {"id": 3, "name": "bottom_right", "x_cm": 105.3, "y_cm": 0.0}
+    {"id": 0, "name": "top_left", "x_cm": 0.0, "y_cm": 197.2},
+    {"id": 1, "name": "top_right", "x_cm": 100.0, "y_cm": 197.2},
+    {"id": 2, "name": "bottom_left", "x_cm": 0.0, "y_cm": 8.2},
+    {"id": 3, "name": "bottom_right", "x_cm": 100.0, "y_cm": 8.2}
   ]
 }

@@ -12,16 +12,18 @@ def write_calibration_overlay(
     calibration: CalibrationResult,
     output_path: str | Path,
 ) -> None:
-    image = cv2.imread(str(image_path))
-    if image is None:
-        raise ValueError(f"could not read image: {image_path}")
-
     marker_by_id = {marker.id: marker for marker in calibration.markers}
-    overlay = (
-        undistort_image(image, calibration.camera_calibration)
-        if calibration.camera_calibration is not None
-        else image.copy()
-    )
+    if isinstance(calibration.working_image, np.ndarray):
+        overlay = calibration.working_image.copy()
+    else:
+        image = cv2.imread(str(image_path))
+        if image is None:
+            raise ValueError(f"could not read image: {image_path}")
+        overlay = (
+            undistort_image(image, calibration.camera_calibration)
+            if calibration.camera_calibration is not None
+            else image.copy()
+        )
     for marker in calibration.markers:
         points = np.array(marker.corners, dtype=np.int32)
         cv2.polylines(overlay, [points], True, (0, 180, 0), 3)
