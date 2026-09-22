@@ -29,8 +29,17 @@ def test_loads_backdrop_layout():
     layout = MarkerLayout.from_json(LAYOUT_PATH)
 
     assert layout.dictionary == "DICT_4X4_50"
-    assert layout.marker_size_cm == 18.0
+    assert layout.marker_size_cm == 16.4
     assert layout.marker_ids == (0, 1, 2, 3)
+    assert [
+        (marker.id, marker.name, marker.x_cm, marker.y_cm)
+        for marker in layout.markers
+    ] == [
+        (0, "top_left", 0.0, 197.2),
+        (1, "top_right", 100.0, 197.2),
+        (2, "bottom_left", 0.0, 8.2),
+        (3, "bottom_right", 100.0, 8.2),
+    ]
 
 
 def test_rejects_duplicate_marker_ids():
