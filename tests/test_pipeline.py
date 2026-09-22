@@ -26,7 +26,13 @@ from height_estimation.body_detection import (
     VGGHeadsDetectorAdapter,
     ViTPoseDetectorAdapter,
 )
-from height_estimation.models import CalibrationResult, MarkerLayout, MarkerPosition
+from height_estimation.models import (
+    CalibrationResult,
+    HomographyResult,
+    MarkerLayout,
+    MarkerPosition,
+    PersonEndpoints,
+)
 from height_estimation.fusion import build_measurement_result
 from height_estimation.pipeline import (
     PIPELINE_STAGE_ORDER,
@@ -187,6 +193,39 @@ def test_default_pipeline_dependencies_keep_optional_adapters_unloaded():
 
     assert result.success is True
     assert calls == 1
+
+
+def test_default_estimation_prefers_calibrated_metric_endpoints():
+    calibration = CalibrationResult(
+        markers=(),
+        geometry=(),
+        cm_per_pixel=0.1,
+        homography=HomographyResult(
+            matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+            reprojection_error_cm=0.0,
+        ),
+        person=PersonEndpoints(
+            box=(20, 20, 60, 160),
+            top_of_head=(50.0, 20.0),
+            bottom_of_feet=(50.0, 180.0),
+            score=1.0,
+        ),
+    )
+
+    estimates = default_pipeline_dependencies().estimation.run(
+        BodyDetections(),
+        calibration=calibration,
+        quality=make_quality(),
+        image_size=(200, 100),
+    )
+
+    assert len(estimates) == 1
+    assert estimates[0].height_cm == 160.0
+    assert estimates[0].metadata["coordinate_system"] == "metric_plane"
+    assert estimates[0].metadata["input_endpoints"] == [
+        [50.0, 20.0],
+        [50.0, 180.0],
+    ]
 
 
 def test_pipeline_config_requires_directory_for_intermediate_outputs(tmp_path):

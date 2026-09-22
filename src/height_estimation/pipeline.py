@@ -33,6 +33,7 @@ from .body_detection import (
 from .calibration import calibrate_image
 from .estimators import estimate_independent_heights
 from .fusion import build_measurement_result
+from .geometry import transform_person_endpoints
 from .models import CalibrationResult, CameraCalibration, MarkerLayout
 from .quality import AcquisitionQualityGate
 
@@ -355,10 +356,27 @@ class _EstimationStage:
         quality: QualityAssessment,
         image_size: tuple[int, int],
     ) -> Sequence[HeightEstimate]:
+        metric_endpoints = None
+        if calibration.person is not None:
+            try:
+                candidate = transform_person_endpoints(
+                    calibration.person,
+                    calibration.homography.matrix,
+                )
+            except (ValueError, cv2.error):
+                candidate = None
+            if candidate is not None and all(
+                isfinite(value)
+                for point in candidate
+                for value in point
+            ) and abs(candidate[1][1] - candidate[0][1]) > 1e-6:
+                metric_endpoints = candidate
+
         return estimate_independent_heights(
             detections,
             cm_per_pixel=calibration.cm_per_pixel,
             image_size=image_size,
+            metric_endpoints=metric_endpoints,
             quality=quality,
         )
 
