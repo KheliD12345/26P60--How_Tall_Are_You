@@ -23,6 +23,11 @@ from height_estimation.body_detection import (
     normalise_segmentation,
 )
 from height_estimation.models import PersonEndpoints
+from height_estimation.optional_detectors import (
+    LazyDetector,
+    OptionalDetectorUnavailable,
+    import_optional_module,
+)
 from height_estimation.quality import AcquisitionQualityGate
 
 
@@ -416,6 +421,60 @@ def test_optional_detector_is_explicitly_unavailable():
     assert result.status == DetectionStatus.UNAVAILABLE
     assert result.available is False
     assert "not installed" in result.diagnostics[0]
+
+
+def test_lazy_detector_constructs_once_on_first_use():
+    instances = []
+
+    class StubDetector:
+        def detect(self, image):
+            return {"keypoints": {"left_hip": (0.4, 0.5)}}
+
+    def factory():
+        detector = StubDetector()
+        instances.append(detector)
+        return detector
+
+    lazy = LazyDetector(factory, name="pose")
+    adapter = PoseDetectorAdapter(lazy)
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    assert lazy.loaded is False
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert len(instances) == 1
+    assert lazy.loaded is True
+
+
+def test_lazy_detector_maps_initialisation_failures_to_unavailable():
+    calls = 0
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        raise FileNotFoundError("model file is missing")
+
+    lazy = LazyDetector(factory, name="head")
+    adapter = HeadDetectorAdapter(lazy)
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.UNAVAILABLE
+    assert second.status == DetectionStatus.UNAVAILABLE
+    assert calls == 1
+    assert "model file is missing" in first.diagnostics[0]
+
+
+def test_optional_module_import_reports_missing_dependency():
+    with pytest.raises(OptionalDetectorUnavailable, match="unavailable"):
+        import_optional_module(
+            "height_estimation._missing_optional_detector_dependency"
+        )
 
 
 def test_adapters_report_invalid_output_as_failure():
