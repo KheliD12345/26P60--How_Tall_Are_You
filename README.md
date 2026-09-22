@@ -57,9 +57,28 @@ OpenCV fallback.
 
 ## Optional Model Adapters
 
-Optional model adapters can be wired explicitly through `PipelineConfig` when
-external detector packages are available. They are disabled by default and are
-constructed lazily on first inference call.
+Install the model dependencies and test tools with:
+
+```powershell
+python -m pip install -e ".[models,test]"
+```
+
+The adapters also require the external detector source modules containing
+`vitpose_detection`, `vggheads_detection`, and `mediapipe_detection` to be
+available through the normal Python environment. The application does not
+modify `sys.path` at runtime.
+
+Optional model adapters can be enabled from the CLI. They are constructed
+lazily on first inference call:
+
+```powershell
+python -m height_estimation --pipeline --model-detectors `
+	--quality-policy continue `
+	person.jpg --layout configs/marker_layout.json
+```
+
+They can also be wired explicitly through `PipelineConfig` when external
+detector packages are available.
 
 ```python
 from height_estimation.body_detection import (
@@ -86,6 +105,10 @@ When an optional dependency or model file is unavailable, the corresponding
 detector returns an unavailable status and the pipeline continues to use
 available evidence. Runtime detector errors remain failure statuses and are
 included in diagnostics.
+
+Model weights are downloaded by the external detector implementations when
+first used. Configure model paths and network access before running a
+model-backed pipeline.
 
 ## Batch Processing
 

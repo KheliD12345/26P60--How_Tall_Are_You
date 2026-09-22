@@ -41,6 +41,16 @@ class BodyDetectionConfig:
     hand_detector: object | None = None
 
 
+def model_backed_body_detection_config() -> BodyDetectionConfig:
+    """Build lazy adapters for the optional model-backed detectors."""
+    return BodyDetectionConfig(
+        pose_detector=ViTPoseDetectorAdapter(),
+        head_detector=VGGHeadsDetectorAdapter(),
+        segmentation_detector=MediaPipeSegmentationAdapter(),
+        hand_detector=MediaPipeHandDetectorAdapter(),
+    )
+
+
 class ImageDetector(Protocol):
     def detect(self, image: np.ndarray) -> object:
         """Return detector-specific output for one BGR image."""
