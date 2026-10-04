@@ -37,6 +37,7 @@ class BodyDetectionConfig:
 
     pose_detector: object | None = None
     head_detector: object | None = None
+    forehead_detector: object | None = None
     segmentation_detector: object | None = None
     hand_detector: object | None = None
 
@@ -46,6 +47,7 @@ def model_backed_body_detection_config() -> BodyDetectionConfig:
     return BodyDetectionConfig(
         pose_detector=ViTPoseDetectorAdapter(),
         head_detector=VGGHeadsDetectorAdapter(),
+        forehead_detector=MediaPipeFaceLandmarkDetectorAdapter(),
         segmentation_detector=MediaPipeSegmentationAdapter(),
         hand_detector=MediaPipeHandDetectorAdapter(),
     )
@@ -554,14 +556,12 @@ def merge_body_detections(
     hair_top = primary.hair_top or secondary.hair_top
     hair_bottom = primary.hair_bottom or secondary.hair_bottom
     _validate_coordinate_systems("keypoints", tuple(keypoints.values()))
-    _validate_coordinate_systems(
-        "head endpoints",
-        (forehead_top, head_top, head_bottom),
-    )
+    _validate_coordinate_systems("head endpoints", (head_top, head_bottom))
+    _validate_coordinate_systems("forehead endpoint", (forehead_top,))
     if head_bbox is not None:
         _validate_coordinate_systems(
             "head detection",
-            (forehead_top, head_top, head_bottom),
+            (head_top, head_bottom),
             head_bbox_coordinate_system,
         )
     _validate_coordinate_systems("hair endpoints", (hair_top, hair_bottom))
@@ -1578,6 +1578,8 @@ def _adapt_detector(
         return PoseDetectorAdapter(detector)  # type: ignore[arg-type]
     if name == "head":
         return HeadDetectorAdapter(detector)  # type: ignore[arg-type]
+    if name == "forehead":
+        return ForeheadDetectorAdapter(detector)  # type: ignore[arg-type]
     if name == "segmentation":
         return SegmentationDetectorAdapter(detector)  # type: ignore[arg-type]
     if name == "hands":
@@ -1594,6 +1596,7 @@ class BodyDetectionOrchestrator:
         configuration: BodyDetectionConfig | None = None,
         pose_detector: object | None = None,
         head_detector: object | None = None,
+        forehead_detector: object | None = None,
         segmentation_detector: object | None = None,
         hand_detector: object | None = None,
         use_person_fallback: bool = True,
@@ -1612,6 +1615,14 @@ class BodyDetectionOrchestrator:
             "head": _adapt_detector(
                 "head",
                 head_detector if head_detector is not None else configuration.head_detector,
+            ),
+            "forehead": _adapt_detector(
+                "forehead",
+                (
+                    forehead_detector
+                    if forehead_detector is not None
+                    else configuration.forehead_detector
+                ),
             ),
             "segmentation": _adapt_detector(
                 "segmentation",

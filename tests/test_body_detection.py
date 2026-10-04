@@ -28,6 +28,7 @@ from height_estimation.body_detection import (
     body_detections_from_person,
     build_body_detection_result,
     merge_body_detections,
+    model_backed_body_detection_config,
     normalise_head_detection,
     normalise_hand_detection,
     normalise_pose_keypoints,
@@ -452,6 +453,9 @@ def test_orchestrator_merges_stubbed_detectors_and_keeps_optional_statuses():
             "head_bbox": {"x1": 0.3, "y1": 0.1, "x2": 0.5, "y2": 0.2},
             "confidence": 0.9,
         },
+        forehead_detector=lambda image: {
+            "forehead_top": {"x": 0.4, "y": 0.08, "visibility": 0.87},
+        },
         use_person_fallback=False,
     )
 
@@ -461,6 +465,8 @@ def test_orchestrator_merges_stubbed_detectors_and_keeps_optional_statuses():
     assert result.success is True
     assert result.detections.keypoints["left_hip"].visibility == 0.9
     assert result.detections.head_bbox == (0.3, 0.1, 0.5, 0.2)
+    assert result.detections.forehead_top == Landmark(0.4, 0.08, 0.87)
+    assert result.detector_results["forehead"].status == DetectionStatus.SUCCESS
     assert result.detector_results["segmentation"].status == DetectionStatus.UNAVAILABLE
     assert result.detector_results["hands"].status == DetectionStatus.UNAVAILABLE
 
@@ -512,6 +518,7 @@ def test_orchestrator_reports_no_person_when_all_configured_detectors_find_none(
     orchestrator = BodyDetectionOrchestrator(
         pose_detector=no_detection,
         head_detector=no_detection,
+        forehead_detector=no_detection,
         segmentation_detector=no_detection,
         hand_detector=no_detection,
         use_person_fallback=False,
@@ -623,6 +630,16 @@ def test_optional_detector_is_explicitly_unavailable():
     assert result.status == DetectionStatus.UNAVAILABLE
     assert result.available is False
     assert "not installed" in result.diagnostics[0]
+
+
+def test_model_backed_configuration_includes_lazy_forehead_detector():
+    configuration = model_backed_body_detection_config()
+
+    assert isinstance(
+        configuration.forehead_detector,
+        MediaPipeFaceLandmarkDetectorAdapter,
+    )
+    assert configuration.forehead_detector.lazy_detector.loaded is False
 
 
 def test_lazy_detector_constructs_once_on_first_use():
