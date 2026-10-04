@@ -354,7 +354,7 @@ class _EstimationStage:
         homography: tuple[tuple[float, float, float], ...],
         image_size: tuple[int, int],
     ) -> tuple[tuple[float, float], tuple[float, float]] | None:
-        head = detections.head_top or detections.keypoints.get("head_top")
+        head = detections.top_measurement_endpoint()
         heels = detections.heel_landmarks()
         if head is None or not heels:
             return None

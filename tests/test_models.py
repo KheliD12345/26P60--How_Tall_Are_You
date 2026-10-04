@@ -308,6 +308,26 @@ def test_body_detections_validate_head_bbox_coordinate_system():
 
     assert detections.head_bbox_coordinate_system == "normalized"
 
+
+def test_body_detections_prefer_forehead_for_top_measurement_endpoint():
+    detections = BodyDetections(
+        keypoints={"head_top": Landmark(0.5, 0.2)},
+        head_top=Landmark(0.5, 0.15),
+        forehead_top=Landmark(0.5, 0.1),
+        head_bbox=(0.4, 0.05, 0.6, 0.3),
+    )
+
+    assert detections.top_measurement_endpoint() == detections.forehead_top
+
+
+def test_body_detections_do_not_derive_forehead_from_head_bbox():
+    detections = BodyDetections(
+        head_bbox=(0.4, 0.05, 0.6, 0.3),
+    )
+
+    assert detections.forehead_top is None
+    assert detections.top_measurement_endpoint() is None
+
     with pytest.raises(ValueError):
         BodyDetections(head_bbox_coordinate_system="camera")
 
