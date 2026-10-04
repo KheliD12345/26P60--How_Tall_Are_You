@@ -13,9 +13,11 @@ from height_estimation.body_detection import (
     HeadDetectorAdapter,
     LazyHeadDetectorAdapter,
     LazyHandDetectorAdapter,
+    LazyFaceLandmarkDetectorAdapter,
     LazyPoseDetectorAdapter,
     LazySegmentationDetectorAdapter,
     MediaPipeHandDetectorAdapter,
+    MediaPipeFaceLandmarkDetectorAdapter,
     MediaPipeSegmentationAdapter,
     PersonFallbackAdapter,
     PoseDetectorAdapter,
@@ -811,6 +813,74 @@ def test_vggheads_adapter_reports_missing_optional_module_as_unavailable():
 
     assert result.status == DetectionStatus.UNAVAILABLE
     assert "missing_vggheads_module" in result.diagnostics[0]
+
+
+def test_mediapipe_face_landmark_adapter_exposes_normalised_forehead_and_caches():
+    calls = 0
+    landmarks = [
+        {"x": 0.5, "y": index / 100.0}
+        for index in range(11)
+    ]
+    landmarks[10]["visibility"] = 0.86
+
+    def factory():
+        nonlocal calls
+        calls += 1
+
+        def detect(image):
+            assert image.shape == (40, 30, 3)
+            return {"face_landmarks": [landmarks]}
+
+        return detect
+
+    adapter = MediaPipeFaceLandmarkDetectorAdapter(factory)
+    image = np.zeros((40, 30, 3), dtype=np.uint8)
+
+    assert adapter.lazy_detector.loaded is False
+    first = adapter.detect(image)
+    second = adapter.detect(image)
+
+    assert first.status == DetectionStatus.SUCCESS
+    assert second.status == DetectionStatus.SUCCESS
+    assert calls == 1
+    assert first.detections.forehead_top == Landmark(0.5, 0.1, 0.86)
+    assert first.detections.forehead_top.coordinate_system == "normalized"
+    assert isinstance(adapter, LazyFaceLandmarkDetectorAdapter)
+
+
+def test_mediapipe_face_landmark_adapter_reports_no_face():
+    adapter = MediaPipeFaceLandmarkDetectorAdapter(
+        lambda: lambda image: {"face_landmarks": []}
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.NO_PERSON
+    assert result.detections.forehead_top is None
+
+
+def test_mediapipe_face_landmark_adapter_defers_missing_model(monkeypatch, tmp_path):
+    imports = []
+
+    def fake_import(module_name):
+        imports.append(module_name)
+        return object()
+
+    monkeypatch.setattr(
+        "height_estimation.body_detection.import_optional_module",
+        fake_import,
+    )
+    adapter = MediaPipeFaceLandmarkDetectorAdapter(
+        model_path=tmp_path / "missing-face-landmarker.task"
+    )
+
+    assert adapter.lazy_detector.loaded is False
+    assert imports == []
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.UNAVAILABLE
+    assert imports == ["mediapipe"]
+    assert "model is unavailable" in result.diagnostics[0]
 
 
 def test_adapters_report_invalid_output_as_failure():
