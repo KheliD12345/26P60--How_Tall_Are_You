@@ -274,6 +274,9 @@ class BodyDetections:
     def heel_points(self) -> tuple[Landmark, ...]:
         return self.heel_landmarks()
 
+    def top_measurement_endpoint(self) -> Landmark | None:
+        return self.forehead_top or self.head_top or self.keypoints.get("head_top")
+
 
 @dataclass(frozen=True)
 class QualityMetrics:

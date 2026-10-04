@@ -253,6 +253,36 @@ def test_default_estimation_prefers_calibrated_metric_endpoints():
     ]
 
 
+def test_default_estimation_prefers_forehead_top_metric_endpoint():
+    calibration = CalibrationResult(
+        markers=(),
+        geometry=(),
+        cm_per_pixel=1.0,
+        homography=HomographyResult(
+            matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+            reprojection_error_cm=0.0,
+        ),
+    )
+    detections = BodyDetections(
+        head_top=Landmark(0.5, 0.2),
+        forehead_top=Landmark(0.5, 0.1),
+        keypoints={"left_heel": Landmark(0.5, 0.9)},
+    )
+
+    estimates = default_pipeline_dependencies().estimation.run(
+        detections,
+        calibration=calibration,
+        quality=make_quality(),
+        image_size=(100, 100),
+    )
+
+    assert estimates[0].method is MeasurementMethod.GEOMETRIC
+    assert estimates[0].metadata["input_endpoints"] == [
+        [50.0, 10.0],
+        [50.0, 90.0],
+    ]
+
+
 def test_pipeline_config_requires_directory_for_intermediate_outputs(tmp_path):
     with pytest.raises(ValueError, match="intermediate_output_dir"):
         PipelineConfig(write_intermediate_outputs=True)
