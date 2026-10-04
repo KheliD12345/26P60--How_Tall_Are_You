@@ -197,11 +197,13 @@ def test_body_detections_normalises_keypoints_and_falls_back_per_side():
         },
         head_top=(15.0, 5.0),
         head_bottom=(15.0, 25.0),
+        forehead_top=(15.0, 8.0),
         head_confidence=0.95,
     )
 
     assert detections.head_top == Landmark(15.0, 5.0)
     assert detections.head_bottom == Landmark(15.0, 25.0)
+    assert detections.forehead_top == Landmark(15.0, 8.0)
     assert detections.head_confidence == 0.95
     assert detections.head_bbox_coordinate_system == "pixel"
     assert detections.heel_landmarks() == (
