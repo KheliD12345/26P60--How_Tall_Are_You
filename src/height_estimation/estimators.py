@@ -81,7 +81,7 @@ class GeometricHeightEstimator:
         if not isfinite(cm_per_pixel or float("nan")) or (cm_per_pixel or 0) <= 0:
             return None
 
-        head_value = detections.head_top or detections.keypoints.get("head_top")
+        head_value = detections.top_measurement_endpoint()
         if head_value is None:
             return None
 
@@ -112,6 +112,11 @@ class GeometricHeightEstimator:
             name.endswith("_heel") for name in detections.keypoints
         ) else "ankle"
         coordinate_system = head.coordinate_system
+        top_name = (
+            "forehead_top"
+            if detections.forehead_top is not None
+            else "head_top"
+        )
         return HeightEstimate(
             method=MeasurementMethod.GEOMETRIC,
             height_cm=height_cm,
@@ -120,7 +125,7 @@ class GeometricHeightEstimator:
             metadata={
                 "coordinate_system": coordinate_system,
                 "cm_per_pixel": cm_per_pixel,
-                "input_landmarks": ["head_top", f"{fallback}_landmarks"],
+                "input_landmarks": [top_name, f"{fallback}_landmarks"],
                 "endpoint_visibility": [
                     head.visibility,
                     max(landmark.visibility for landmark in heels),
@@ -146,7 +151,7 @@ class HeadBoundingBoxHeightEstimator:
         if cm_per_pixel is None or not isfinite(cm_per_pixel) or cm_per_pixel <= 0:
             return None
 
-        top = detections.head_top
+        top = detections.top_measurement_endpoint()
         bottom = detections.head_bottom
         approximation = True
         source = "head_bbox"
@@ -164,7 +169,11 @@ class HeadBoundingBoxHeightEstimator:
             except ValueError:
                 return None
             approximation = False
-            source = "head_landmarks"
+            source = (
+                "forehead_landmark"
+                if detections.forehead_top is not None
+                else "head_landmarks"
+            )
             completeness = 1.0
             visibility = min(top_landmark.visibility, bottom_landmark.visibility)
         elif detections.head_bbox is not None:
@@ -248,8 +257,9 @@ class AnthropometricHeightEstimator:
             return None
 
         landmarks = dict(detections.keypoints)
-        if detections.head_top is not None:
-            landmarks["head_top"] = detections.head_top
+        top = detections.top_measurement_endpoint()
+        if top is not None:
+            landmarks["head_top"] = top
         if detections.head_bottom is not None:
             landmarks["head_bottom"] = detections.head_bottom
 
