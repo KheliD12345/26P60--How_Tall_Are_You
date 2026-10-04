@@ -165,6 +165,7 @@ def normalise_pose_keypoints(
         keypoints=keypoints,
         head_top=keypoints.get("head_top"),
         head_bottom=keypoints.get("head_bottom"),
+        forehead_top=keypoints.get("forehead_top"),
     )
 
 
@@ -223,11 +224,17 @@ def normalise_head_detection(
     )
     if bbox_value is None:
         bbox_value = detection.get("head_bbox", detection.get("bbox"))
+    system = _coordinate_system(bbox_system)
+    forehead_value = detection.get("forehead_top")
+    forehead_top = (
+        None
+        if forehead_value is None
+        else _normalise_landmark(forehead_value, system)
+    )
     if bbox_value is None:
-        return BodyDetections()
+        return BodyDetections(forehead_top=forehead_top)
 
     bbox = _normalise_bbox(bbox_value, bbox_system)
-    system = _coordinate_system(bbox_system)
     center_x = (bbox[0] + bbox[2]) / 2.0
     top_value = _mapping_value(
         detection,
@@ -266,6 +273,7 @@ def normalise_head_detection(
     return BodyDetections(
         head_top=head_top,
         head_bottom=head_bottom,
+        forehead_top=forehead_top,
         head_bbox=bbox,
         head_confidence=0.0 if confidence is None else float(confidence),
         head_bbox_coordinate_system=system,
@@ -536,6 +544,7 @@ def merge_body_detections(
 
     head_top = primary.head_top or secondary.head_top
     head_bottom = primary.head_bottom or secondary.head_bottom
+    forehead_top = primary.forehead_top or secondary.forehead_top
     head_bbox = primary.head_bbox or secondary.head_bbox
     head_bbox_coordinate_system = (
         primary.head_bbox_coordinate_system
@@ -545,11 +554,14 @@ def merge_body_detections(
     hair_top = primary.hair_top or secondary.hair_top
     hair_bottom = primary.hair_bottom or secondary.hair_bottom
     _validate_coordinate_systems("keypoints", tuple(keypoints.values()))
-    _validate_coordinate_systems("head endpoints", (head_top, head_bottom))
+    _validate_coordinate_systems(
+        "head endpoints",
+        (forehead_top, head_top, head_bottom),
+    )
     if head_bbox is not None:
         _validate_coordinate_systems(
             "head detection",
-            (head_top, head_bottom),
+            (forehead_top, head_top, head_bottom),
             head_bbox_coordinate_system,
         )
     _validate_coordinate_systems("hair endpoints", (hair_top, hair_bottom))
@@ -562,6 +574,7 @@ def merge_body_detections(
         keypoints=keypoints,
         head_top=head_top,
         head_bottom=head_bottom,
+        forehead_top=forehead_top,
         head_bbox=head_bbox,
         head_confidence=(
             primary.head_confidence
@@ -632,6 +645,7 @@ def _detections_to_dict(detections: BodyDetections) -> dict[str, Any]:
         },
         "head_top": _landmark_to_dict(detections.head_top),
         "head_bottom": _landmark_to_dict(detections.head_bottom),
+        "forehead_top": _landmark_to_dict(detections.forehead_top),
         "head_bbox": (
             None
             if detections.head_bbox is None
@@ -840,6 +854,7 @@ class _NormalisingAdapter:
             detections.keypoints
             or detections.head_top
             or detections.head_bottom
+            or detections.forehead_top
             or detections.head_bbox is not None
             or detections.segmentation_mask is not None
             or detections.hair_top
@@ -935,6 +950,7 @@ _VITPOSE_DIRECT_NAMES = {
     "right_heel",
     "nose",
     "head",
+    "forehead_top",
 }
 
 

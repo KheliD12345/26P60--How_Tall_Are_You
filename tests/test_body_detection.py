@@ -47,6 +47,7 @@ def test_pose_keypoints_preserve_normalised_coordinates_and_visibility():
             "keypoints": {
                 "left_hip": {"x": 0.25, "y": 0.4, "confidence": 0.8},
                 "right_heel": {"x": 0.7, "y": 0.95, "visibility": 0.9},
+                "forehead_top": {"x": 0.5, "y": 0.12, "visibility": 0.85},
             },
         }
     )
@@ -54,6 +55,7 @@ def test_pose_keypoints_preserve_normalised_coordinates_and_visibility():
     assert detections.keypoints["left_hip"] == Landmark(0.25, 0.4, 0.8)
     assert detections.keypoints["right_heel"].coordinate_system == "normalized"
     assert detections.keypoints["right_heel"].to_pixel(200, 400) == (140.0, 380.0)
+    assert detections.forehead_top == Landmark(0.5, 0.12, 0.85)
 
 
 def test_pose_keypoints_preserve_pixel_coordinates_and_heel_aliases():
@@ -94,6 +96,7 @@ def test_head_detection_preserves_pixel_bbox_and_endpoints():
         {
             "head_bbox_pixels": {"x1": 40, "y1": 20, "x2": 80, "y2": 70},
             "head_top_y_pixels": 18,
+            "forehead_top": {"x": 60, "y": 22, "visibility": 0.84},
             "confidence": 0.91,
         }
     )
@@ -102,7 +105,16 @@ def test_head_detection_preserves_pixel_bbox_and_endpoints():
     assert detections.head_bbox_coordinate_system == "pixel"
     assert detections.head_top == Landmark(60.0, 18.0, normalized=False)
     assert detections.head_bottom == Landmark(60.0, 70.0, normalized=False)
+    assert detections.forehead_top == Landmark(60.0, 22.0, 0.84, normalized=False)
     assert detections.head_confidence == 0.91
+
+
+def test_head_detection_does_not_infer_forehead_from_bbox():
+    detections = normalise_head_detection(
+        {"head_bbox_pixels": {"x1": 40, "y1": 20, "x2": 80, "y2": 70}}
+    )
+
+    assert detections.forehead_top is None
 
 
 def test_head_detection_preserves_normalised_bbox_coordinates():
@@ -686,6 +698,7 @@ def test_vitpose_adapter_flattens_grouped_landmarks_and_caches_detector():
                     "left": {"x": 0.36, "y": 0.95, "confidence": 0.7},
                 },
                 "head_top": {"x": 0.5, "y": 0.1},
+                "forehead_top": {"x": 0.5, "y": 0.12, "visibility": 0.8},
             }
 
     def factory():
@@ -705,6 +718,7 @@ def test_vitpose_adapter_flattens_grouped_landmarks_and_caches_detector():
     assert first.detections.keypoints["left_shoulder"].visibility == 0.8
     assert first.detections.keypoints["left_hip"].coordinate_system == "normalized"
     assert first.detections.keypoints["left_heel"].visibility == 0.7
+    assert first.detections.forehead_top == Landmark(0.5, 0.12, 0.8)
     assert "head_top" not in first.detections.keypoints
     assert isinstance(adapter, LazyPoseDetectorAdapter)
 
@@ -851,6 +865,16 @@ def test_merge_does_not_replace_valid_values_with_empty_fallback():
     assert merged.head_top == valid.head_top
 
 
+def test_merge_preserves_primary_forehead_and_fills_missing_forehead():
+    primary = BodyDetections(forehead_top=Landmark(0.5, 0.1))
+    secondary = BodyDetections(forehead_top=Landmark(0.5, 0.2))
+
+    assert merge_body_detections(primary, secondary).forehead_top == primary.forehead_top
+    assert merge_body_detections(
+        BodyDetections(), secondary
+    ).forehead_top == secondary.forehead_top
+
+
 def test_merge_keeps_hand_metadata_aligned_with_selected_pairs():
     primary = BodyDetections(hand_lengths=(((0.1, 0.5), (0.1, 0.4)),))
     secondary = BodyDetections(
@@ -891,6 +915,7 @@ def test_body_detection_result_serialises_all_detection_fields():
         detections=BodyDetections(
             head_top=Landmark(10, 20, normalized=False),
             head_bottom=Landmark(10, 50, normalized=False),
+            forehead_top=Landmark(10, 24, normalized=False),
             head_bbox=(5, 10, 15, 55),
             head_confidence=0.9,
             hair_top=Landmark(10, 5, normalized=False),
@@ -910,6 +935,7 @@ def test_body_detection_result_serialises_all_detection_fields():
     payload = result.to_dict()
 
     assert payload["detections"]["head_bbox"] == [5, 10, 15, 55]
+    assert payload["detections"]["forehead_top"]["y"] == 24.0
     assert payload["detections"]["handedness"] == ["left"]
     assert payload["detections"]["segmentation_mask"] == [[1, 1], [1, 1]]
     assert payload["detections"]["hair_top"]["coordinate_system"] == "pixel"
