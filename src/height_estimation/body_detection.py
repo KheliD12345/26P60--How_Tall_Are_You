@@ -37,8 +37,6 @@ class BodyDetectionConfig:
 
     pose_detector: object | None = None
     head_detector: object | None = None
-    forehead_detector: object | None = None
-    use_forehead_top: bool = False
     segmentation_detector: object | None = None
     hand_detector: object | None = None
 
@@ -48,8 +46,6 @@ def model_backed_body_detection_config() -> BodyDetectionConfig:
     return BodyDetectionConfig(
         pose_detector=ViTPoseDetectorAdapter(),
         head_detector=VGGHeadsDetectorAdapter(),
-        forehead_detector=MediaPipeFaceLandmarkDetectorAdapter(),
-        use_forehead_top=False,
         segmentation_detector=MediaPipeSegmentationAdapter(),
         hand_detector=MediaPipeHandDetectorAdapter(),
     )
@@ -169,7 +165,6 @@ def normalise_pose_keypoints(
         keypoints=keypoints,
         head_top=keypoints.get("head_top"),
         head_bottom=keypoints.get("head_bottom"),
-        forehead_top=keypoints.get("forehead_top"),
     )
 
 
@@ -228,17 +223,11 @@ def normalise_head_detection(
     )
     if bbox_value is None:
         bbox_value = detection.get("head_bbox", detection.get("bbox"))
-    system = _coordinate_system(bbox_system)
-    forehead_value = detection.get("forehead_top")
-    forehead_top = (
-        None
-        if forehead_value is None
-        else _normalise_landmark(forehead_value, system)
-    )
     if bbox_value is None:
-        return BodyDetections(forehead_top=forehead_top)
+        return BodyDetections()
 
     bbox = _normalise_bbox(bbox_value, bbox_system)
+    system = _coordinate_system(bbox_system)
     center_x = (bbox[0] + bbox[2]) / 2.0
     top_value = _mapping_value(
         detection,
@@ -277,7 +266,6 @@ def normalise_head_detection(
     return BodyDetections(
         head_top=head_top,
         head_bottom=head_bottom,
-        forehead_top=forehead_top,
         head_bbox=bbox,
         head_confidence=0.0 if confidence is None else float(confidence),
         head_bbox_coordinate_system=system,
@@ -548,7 +536,6 @@ def merge_body_detections(
 
     head_top = primary.head_top or secondary.head_top
     head_bottom = primary.head_bottom or secondary.head_bottom
-    forehead_top = primary.forehead_top or secondary.forehead_top
     head_bbox = primary.head_bbox or secondary.head_bbox
     head_bbox_coordinate_system = (
         primary.head_bbox_coordinate_system
@@ -559,7 +546,6 @@ def merge_body_detections(
     hair_bottom = primary.hair_bottom or secondary.hair_bottom
     _validate_coordinate_systems("keypoints", tuple(keypoints.values()))
     _validate_coordinate_systems("head endpoints", (head_top, head_bottom))
-    _validate_coordinate_systems("forehead endpoint", (forehead_top,))
     if head_bbox is not None:
         _validate_coordinate_systems(
             "head detection",
@@ -576,7 +562,6 @@ def merge_body_detections(
         keypoints=keypoints,
         head_top=head_top,
         head_bottom=head_bottom,
-        forehead_top=forehead_top,
         head_bbox=head_bbox,
         head_confidence=(
             primary.head_confidence
@@ -647,7 +632,6 @@ def _detections_to_dict(detections: BodyDetections) -> dict[str, Any]:
         },
         "head_top": _landmark_to_dict(detections.head_top),
         "head_bottom": _landmark_to_dict(detections.head_bottom),
-        "forehead_top": _landmark_to_dict(detections.forehead_top),
         "head_bbox": (
             None
             if detections.head_bbox is None
@@ -856,7 +840,6 @@ class _NormalisingAdapter:
             detections.keypoints
             or detections.head_top
             or detections.head_bottom
-            or detections.forehead_top
             or detections.head_bbox is not None
             or detections.segmentation_mask is not None
             or detections.hair_top
@@ -876,14 +859,6 @@ class PoseDetectorAdapter(_NormalisingAdapter):
 class HeadDetectorAdapter(_NormalisingAdapter):
     def __init__(self, detector: Callable[[np.ndarray], object] | ImageDetector):
         super().__init__(detector, "head")
-
-    def detect(self, image: np.ndarray) -> DetectorResult:
-        return self._result(image, normalise_head_detection)
-
-
-class ForeheadDetectorAdapter(_NormalisingAdapter):
-    def __init__(self, detector: Callable[[np.ndarray], object] | ImageDetector):
-        super().__init__(detector, "forehead")
 
     def detect(self, image: np.ndarray) -> DetectorResult:
         return self._result(image, normalise_head_detection)
@@ -960,7 +935,6 @@ _VITPOSE_DIRECT_NAMES = {
     "right_heel",
     "nose",
     "head",
-    "forehead_top",
 }
 
 
@@ -1190,162 +1164,6 @@ class VGGHeadsDetectorAdapter(HeadDetectorAdapter):
 
 LazyPoseDetectorAdapter = ViTPoseDetectorAdapter
 LazyHeadDetectorAdapter = VGGHeadsDetectorAdapter
-
-
-def _face_landmark_record(value: object) -> bool:
-    if isinstance(value, Mapping):
-        return "x" in value and "y" in value
-    return hasattr(value, "x") and hasattr(value, "y")
-
-
-def _face_landmark_payload(
-    value: object,
-    forehead_landmark_index: int,
-) -> Mapping[str, Any]:
-    if isinstance(value, Mapping) and value.get("forehead_top") is not None:
-        payload = dict(value)
-        payload.setdefault("coordinate_system", "normalized")
-        return payload
-
-    if isinstance(value, Mapping):
-        faces = value.get("face_landmarks", value.get("landmarks"))
-    else:
-        faces = getattr(value, "face_landmarks", getattr(value, "landmarks", None))
-    if faces is None:
-        return {"coordinate_system": "normalized"}
-
-    try:
-        if len(faces) == 0:  # type: ignore[arg-type]
-            return {"coordinate_system": "normalized"}
-        first_face = faces[0]  # type: ignore[index]
-        face = faces if _face_landmark_record(first_face) else first_face
-        point = face[forehead_landmark_index]
-    except (IndexError, KeyError, TypeError, ValueError) as error:
-        raise ValueError(
-            "face landmark output does not contain the forehead landmark"
-        ) from error
-
-    if not _face_landmark_record(point):
-        raise ValueError("forehead landmark output is malformed")
-    if isinstance(point, Mapping):
-        visibility = point.get(
-            "visibility",
-            point.get("presence", point.get("confidence", 1.0)),
-        )
-        x_value = point.get("x")
-        y_value = point.get("y")
-    else:
-        visibility = getattr(
-            point,
-            "visibility",
-            getattr(point, "presence", getattr(point, "confidence", 1.0)),
-        )
-        x_value = getattr(point, "x")
-        y_value = getattr(point, "y")
-    return {
-        "coordinate_system": "normalized",
-        "forehead_top": {
-            "x": x_value,
-            "y": y_value,
-            "visibility": visibility,
-        },
-    }
-
-
-def _mediapipe_face_landmarker_factory(
-    options: Mapping[str, Any],
-) -> Callable[[], object]:
-    def factory() -> object:
-        mediapipe = import_optional_module("mediapipe")
-        configured = dict(options)
-        model_path = configured.pop("model_path", None)
-        if model_path is None:
-            raise OptionalDetectorUnavailable(
-                "MediaPipe face landmark model path is not configured"
-            )
-        model_file = Path(model_path)
-        if not model_file.is_file():
-            raise OptionalDetectorUnavailable(
-                f"MediaPipe face landmark model is unavailable: {model_file}"
-            )
-        try:
-            python = mediapipe.tasks.python
-            vision = python.vision
-            face_options = {
-                "base_options": python.BaseOptions(
-                    model_asset_path=str(model_file)
-                ),
-                "running_mode": vision.RunningMode.IMAGE,
-            }
-            face_options.update(configured)
-            landmarker = vision.FaceLandmarker.create_from_options(
-                vision.FaceLandmarkerOptions(**face_options)
-            )
-            image_type = mediapipe.Image
-            image_format = mediapipe.ImageFormat.SRGB
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as error:
-            raise OptionalDetectorUnavailable(
-                f"MediaPipe face landmark detector is unavailable: {error}"
-            ) from error
-
-        def detect(image: np.ndarray) -> object:
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            mp_image = image_type(image_format=image_format, data=image_rgb)
-            return landmarker.detect(mp_image)
-
-        return detect
-
-    return factory
-
-
-class MediaPipeFaceLandmarkDetectorAdapter(ForeheadDetectorAdapter):
-    """Lazily load MediaPipe Face Landmarker and expose landmark 10."""
-
-    def __init__(
-        self,
-        detector_factory: Callable[[], object] | None = None,
-        *,
-        model_path: str | Path | None = None,
-        num_faces: int = 1,
-        min_face_detection_confidence: float = 0.5,
-        min_face_presence_confidence: float = 0.5,
-        min_tracking_confidence: float = 0.5,
-        forehead_landmark_index: int = 10,
-        detector_options: Mapping[str, Any] | None = None,
-    ) -> None:
-        if forehead_landmark_index < 0:
-            raise ValueError("forehead landmark index must not be negative")
-        options: dict[str, Any] = {
-            "model_path": model_path,
-            "num_faces": num_faces,
-            "min_face_detection_confidence": min_face_detection_confidence,
-            "min_face_presence_confidence": min_face_presence_confidence,
-            "min_tracking_confidence": min_tracking_confidence,
-        }
-        if detector_options is not None:
-            options.update(detector_options)
-        factory = detector_factory or _mediapipe_face_landmarker_factory(options)
-        self.forehead_landmark_index = forehead_landmark_index
-        self.lazy_detector = LazyDetector(factory, name="forehead")
-        super().__init__(self.lazy_detector)
-
-    def _run(self, image: np.ndarray) -> object:
-        raw = self.lazy_detector.detect(image)
-        if isinstance(raw, Mapping) and (
-            raw.get("status") in {
-                DetectionStatus.UNAVAILABLE.value,
-                DetectionStatus.FAILED.value,
-            }
-            or raw.get("success") is False
-        ):
-            return raw
-        return _face_landmark_payload(raw, self.forehead_landmark_index)
-
-
-LazyFaceLandmarkDetectorAdapter = MediaPipeFaceLandmarkDetectorAdapter
-MediaPipeForeheadDetectorAdapter = MediaPipeFaceLandmarkDetectorAdapter
-LazyForeheadDetectorAdapter = MediaPipeFaceLandmarkDetectorAdapter
-
 
 class SegmentationDetectorAdapter(_NormalisingAdapter):
     def __init__(self, detector: Callable[[np.ndarray], object] | ImageDetector):
@@ -1580,8 +1398,6 @@ def _adapt_detector(
         return PoseDetectorAdapter(detector)  # type: ignore[arg-type]
     if name == "head":
         return HeadDetectorAdapter(detector)  # type: ignore[arg-type]
-    if name == "forehead":
-        return ForeheadDetectorAdapter(detector)  # type: ignore[arg-type]
     if name == "segmentation":
         return SegmentationDetectorAdapter(detector)  # type: ignore[arg-type]
     if name == "hands":
@@ -1598,7 +1414,6 @@ class BodyDetectionOrchestrator:
         configuration: BodyDetectionConfig | None = None,
         pose_detector: object | None = None,
         head_detector: object | None = None,
-        forehead_detector: object | None = None,
         segmentation_detector: object | None = None,
         hand_detector: object | None = None,
         use_person_fallback: bool = True,
@@ -1617,14 +1432,6 @@ class BodyDetectionOrchestrator:
             "head": _adapt_detector(
                 "head",
                 head_detector if head_detector is not None else configuration.head_detector,
-            ),
-            "forehead": _adapt_detector(
-                "forehead",
-                (
-                    forehead_detector
-                    if forehead_detector is not None
-                    else configuration.forehead_detector
-                ),
             ),
             "segmentation": _adapt_detector(
                 "segmentation",

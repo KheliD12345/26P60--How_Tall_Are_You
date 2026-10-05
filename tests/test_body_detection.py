@@ -13,11 +13,9 @@ from height_estimation.body_detection import (
     HeadDetectorAdapter,
     LazyHeadDetectorAdapter,
     LazyHandDetectorAdapter,
-    LazyFaceLandmarkDetectorAdapter,
     LazyPoseDetectorAdapter,
     LazySegmentationDetectorAdapter,
     MediaPipeHandDetectorAdapter,
-    MediaPipeFaceLandmarkDetectorAdapter,
     MediaPipeSegmentationAdapter,
     PersonFallbackAdapter,
     PoseDetectorAdapter,
@@ -28,7 +26,6 @@ from height_estimation.body_detection import (
     body_detections_from_person,
     build_body_detection_result,
     merge_body_detections,
-    model_backed_body_detection_config,
     normalise_head_detection,
     normalise_hand_detection,
     normalise_pose_keypoints,
@@ -50,7 +47,6 @@ def test_pose_keypoints_preserve_normalised_coordinates_and_visibility():
             "keypoints": {
                 "left_hip": {"x": 0.25, "y": 0.4, "confidence": 0.8},
                 "right_heel": {"x": 0.7, "y": 0.95, "visibility": 0.9},
-                "forehead_top": {"x": 0.5, "y": 0.12, "visibility": 0.85},
             },
         }
     )
@@ -58,7 +54,6 @@ def test_pose_keypoints_preserve_normalised_coordinates_and_visibility():
     assert detections.keypoints["left_hip"] == Landmark(0.25, 0.4, 0.8)
     assert detections.keypoints["right_heel"].coordinate_system == "normalized"
     assert detections.keypoints["right_heel"].to_pixel(200, 400) == (140.0, 380.0)
-    assert detections.forehead_top == Landmark(0.5, 0.12, 0.85)
 
 
 def test_pose_keypoints_preserve_pixel_coordinates_and_heel_aliases():
@@ -99,7 +94,6 @@ def test_head_detection_preserves_pixel_bbox_and_endpoints():
         {
             "head_bbox_pixels": {"x1": 40, "y1": 20, "x2": 80, "y2": 70},
             "head_top_y_pixels": 18,
-            "forehead_top": {"x": 60, "y": 22, "visibility": 0.84},
             "confidence": 0.91,
         }
     )
@@ -108,16 +102,7 @@ def test_head_detection_preserves_pixel_bbox_and_endpoints():
     assert detections.head_bbox_coordinate_system == "pixel"
     assert detections.head_top == Landmark(60.0, 18.0, normalized=False)
     assert detections.head_bottom == Landmark(60.0, 70.0, normalized=False)
-    assert detections.forehead_top == Landmark(60.0, 22.0, 0.84, normalized=False)
     assert detections.head_confidence == 0.91
-
-
-def test_head_detection_does_not_infer_forehead_from_bbox():
-    detections = normalise_head_detection(
-        {"head_bbox_pixels": {"x1": 40, "y1": 20, "x2": 80, "y2": 70}}
-    )
-
-    assert detections.forehead_top is None
 
 
 def test_head_detection_preserves_normalised_bbox_coordinates():
@@ -453,9 +438,6 @@ def test_orchestrator_merges_stubbed_detectors_and_keeps_optional_statuses():
             "head_bbox": {"x1": 0.3, "y1": 0.1, "x2": 0.5, "y2": 0.2},
             "confidence": 0.9,
         },
-        forehead_detector=lambda image: {
-            "forehead_top": {"x": 0.4, "y": 0.08, "visibility": 0.87},
-        },
         use_person_fallback=False,
     )
 
@@ -465,8 +447,6 @@ def test_orchestrator_merges_stubbed_detectors_and_keeps_optional_statuses():
     assert result.success is True
     assert result.detections.keypoints["left_hip"].visibility == 0.9
     assert result.detections.head_bbox == (0.3, 0.1, 0.5, 0.2)
-    assert result.detections.forehead_top == Landmark(0.4, 0.08, 0.87)
-    assert result.detector_results["forehead"].status == DetectionStatus.SUCCESS
     assert result.detector_results["segmentation"].status == DetectionStatus.UNAVAILABLE
     assert result.detector_results["hands"].status == DetectionStatus.UNAVAILABLE
 
@@ -518,7 +498,6 @@ def test_orchestrator_reports_no_person_when_all_configured_detectors_find_none(
     orchestrator = BodyDetectionOrchestrator(
         pose_detector=no_detection,
         head_detector=no_detection,
-        forehead_detector=no_detection,
         segmentation_detector=no_detection,
         hand_detector=no_detection,
         use_person_fallback=False,
@@ -632,16 +611,6 @@ def test_optional_detector_is_explicitly_unavailable():
     assert "not installed" in result.diagnostics[0]
 
 
-def test_model_backed_configuration_includes_lazy_forehead_detector():
-    configuration = model_backed_body_detection_config()
-
-    assert isinstance(
-        configuration.forehead_detector,
-        MediaPipeFaceLandmarkDetectorAdapter,
-    )
-    assert configuration.forehead_detector.lazy_detector.loaded is False
-
-
 def test_lazy_detector_constructs_once_on_first_use():
     instances = []
 
@@ -717,7 +686,6 @@ def test_vitpose_adapter_flattens_grouped_landmarks_and_caches_detector():
                     "left": {"x": 0.36, "y": 0.95, "confidence": 0.7},
                 },
                 "head_top": {"x": 0.5, "y": 0.1},
-                "forehead_top": {"x": 0.5, "y": 0.12, "visibility": 0.8},
             }
 
     def factory():
@@ -737,7 +705,6 @@ def test_vitpose_adapter_flattens_grouped_landmarks_and_caches_detector():
     assert first.detections.keypoints["left_shoulder"].visibility == 0.8
     assert first.detections.keypoints["left_hip"].coordinate_system == "normalized"
     assert first.detections.keypoints["left_heel"].visibility == 0.7
-    assert first.detections.forehead_top == Landmark(0.5, 0.12, 0.8)
     assert "head_top" not in first.detections.keypoints
     assert isinstance(adapter, LazyPoseDetectorAdapter)
 
@@ -832,74 +799,6 @@ def test_vggheads_adapter_reports_missing_optional_module_as_unavailable():
     assert "missing_vggheads_module" in result.diagnostics[0]
 
 
-def test_mediapipe_face_landmark_adapter_exposes_normalised_forehead_and_caches():
-    calls = 0
-    landmarks = [
-        {"x": 0.5, "y": index / 100.0}
-        for index in range(11)
-    ]
-    landmarks[10]["visibility"] = 0.86
-
-    def factory():
-        nonlocal calls
-        calls += 1
-
-        def detect(image):
-            assert image.shape == (40, 30, 3)
-            return {"face_landmarks": [landmarks]}
-
-        return detect
-
-    adapter = MediaPipeFaceLandmarkDetectorAdapter(factory)
-    image = np.zeros((40, 30, 3), dtype=np.uint8)
-
-    assert adapter.lazy_detector.loaded is False
-    first = adapter.detect(image)
-    second = adapter.detect(image)
-
-    assert first.status == DetectionStatus.SUCCESS
-    assert second.status == DetectionStatus.SUCCESS
-    assert calls == 1
-    assert first.detections.forehead_top == Landmark(0.5, 0.1, 0.86)
-    assert first.detections.forehead_top.coordinate_system == "normalized"
-    assert isinstance(adapter, LazyFaceLandmarkDetectorAdapter)
-
-
-def test_mediapipe_face_landmark_adapter_reports_no_face():
-    adapter = MediaPipeFaceLandmarkDetectorAdapter(
-        lambda: lambda image: {"face_landmarks": []}
-    )
-
-    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
-
-    assert result.status == DetectionStatus.NO_PERSON
-    assert result.detections.forehead_top is None
-
-
-def test_mediapipe_face_landmark_adapter_defers_missing_model(monkeypatch, tmp_path):
-    imports = []
-
-    def fake_import(module_name):
-        imports.append(module_name)
-        return object()
-
-    monkeypatch.setattr(
-        "height_estimation.body_detection.import_optional_module",
-        fake_import,
-    )
-    adapter = MediaPipeFaceLandmarkDetectorAdapter(
-        model_path=tmp_path / "missing-face-landmarker.task"
-    )
-
-    assert adapter.lazy_detector.loaded is False
-    assert imports == []
-    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
-
-    assert result.status == DetectionStatus.UNAVAILABLE
-    assert imports == ["mediapipe"]
-    assert "model is unavailable" in result.diagnostics[0]
-
-
 def test_adapters_report_invalid_output_as_failure():
     result = PoseDetectorAdapter(
         lambda image: {"keypoints": {"left_hip": {"x": 0.5}}}
@@ -952,16 +851,6 @@ def test_merge_does_not_replace_valid_values_with_empty_fallback():
     assert merged.head_top == valid.head_top
 
 
-def test_merge_preserves_primary_forehead_and_fills_missing_forehead():
-    primary = BodyDetections(forehead_top=Landmark(0.5, 0.1))
-    secondary = BodyDetections(forehead_top=Landmark(0.5, 0.2))
-
-    assert merge_body_detections(primary, secondary).forehead_top == primary.forehead_top
-    assert merge_body_detections(
-        BodyDetections(), secondary
-    ).forehead_top == secondary.forehead_top
-
-
 def test_merge_keeps_hand_metadata_aligned_with_selected_pairs():
     primary = BodyDetections(hand_lengths=(((0.1, 0.5), (0.1, 0.4)),))
     secondary = BodyDetections(
@@ -1002,7 +891,6 @@ def test_body_detection_result_serialises_all_detection_fields():
         detections=BodyDetections(
             head_top=Landmark(10, 20, normalized=False),
             head_bottom=Landmark(10, 50, normalized=False),
-            forehead_top=Landmark(10, 24, normalized=False),
             head_bbox=(5, 10, 15, 55),
             head_confidence=0.9,
             hair_top=Landmark(10, 5, normalized=False),
@@ -1022,7 +910,6 @@ def test_body_detection_result_serialises_all_detection_fields():
     payload = result.to_dict()
 
     assert payload["detections"]["head_bbox"] == [5, 10, 15, 55]
-    assert payload["detections"]["forehead_top"]["y"] == 24.0
     assert payload["detections"]["handedness"] == ["left"]
     assert payload["detections"]["segmentation_mask"] == [[1, 1], [1, 1]]
     assert payload["detections"]["hair_top"]["coordinate_system"] == "pixel"
