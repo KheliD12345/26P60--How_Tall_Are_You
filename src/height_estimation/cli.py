@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="enable optional pose, head, segmentation, and hand detectors",
     )
+    parser.add_argument(
+        "--use-forehead-top",
+        action="store_true",
+        help="use the optional forehead landmark as the height endpoint",
+    )
     return parser
 
 
@@ -170,6 +175,7 @@ def _run_pipeline_mode(args: argparse.Namespace, layout: MarkerLayout) -> int:
                     if args.model_detectors
                     else None
                 ),
+                use_forehead_top=args.use_forehead_top,
             )
             result = MeasurementPipeline(config=config).run(
                 PipelineInput(

@@ -274,8 +274,14 @@ class BodyDetections:
     def heel_points(self) -> tuple[Landmark, ...]:
         return self.heel_landmarks()
 
-    def top_measurement_endpoint(self) -> Landmark | None:
-        return self.forehead_top or self.head_top or self.keypoints.get("head_top")
+    def top_measurement_endpoint(
+        self,
+        *,
+        use_forehead_top: bool = False,
+    ) -> Landmark | None:
+        if use_forehead_top and self.forehead_top is not None:
+            return self.forehead_top
+        return self.head_top or self.keypoints.get("head_top")
 
 
 @dataclass(frozen=True)
