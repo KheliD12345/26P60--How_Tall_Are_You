@@ -201,6 +201,7 @@ def test_forehead_contract_stays_distinct_from_head_bbox_top_across_estimators()
         detections,
         cm_per_pixel=1.0,
         image_size=(100, 100),
+        use_forehead_top=True,
     )
     by_method = {estimate.method: estimate for estimate in estimates}
 
@@ -212,7 +213,7 @@ def test_forehead_contract_stays_distinct_from_head_bbox_top_across_estimators()
         by_method[MeasurementMethod.HEAD_BBOX].metadata["source"]
         == "forehead_landmark"
     )
-    assert detections.top_measurement_endpoint() == detections.forehead_top
+    assert detections.top_measurement_endpoint(use_forehead_top=True) == detections.forehead_top
 
     payload = BodyDetectionResult(detections=detections).to_dict()
     assert payload["detections"]["head_top"]["y"] == 0.05

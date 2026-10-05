@@ -38,6 +38,7 @@ class BodyDetectionConfig:
     pose_detector: object | None = None
     head_detector: object | None = None
     forehead_detector: object | None = None
+    use_forehead_top: bool = False
     segmentation_detector: object | None = None
     hand_detector: object | None = None
 
@@ -48,6 +49,7 @@ def model_backed_body_detection_config() -> BodyDetectionConfig:
         pose_detector=ViTPoseDetectorAdapter(),
         head_detector=VGGHeadsDetectorAdapter(),
         forehead_detector=MediaPipeFaceLandmarkDetectorAdapter(),
+        use_forehead_top=False,
         segmentation_detector=MediaPipeSegmentationAdapter(),
         hand_detector=MediaPipeHandDetectorAdapter(),
     )

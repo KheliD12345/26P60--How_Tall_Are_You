@@ -253,7 +253,7 @@ def test_default_estimation_prefers_calibrated_metric_endpoints():
     ]
 
 
-def test_default_estimation_prefers_forehead_top_metric_endpoint():
+def test_forehead_estimation_can_be_enabled_explicitly():
     calibration = CalibrationResult(
         markers=(),
         geometry=(),
@@ -269,7 +269,9 @@ def test_default_estimation_prefers_forehead_top_metric_endpoint():
         keypoints={"left_heel": Landmark(0.5, 0.9)},
     )
 
-    estimates = default_pipeline_dependencies().estimation.run(
+    estimates = default_pipeline_dependencies(
+        PipelineConfig(use_forehead_top=True)
+    ).estimation.run(
         detections,
         calibration=calibration,
         quality=make_quality(),

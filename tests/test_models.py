@@ -309,7 +309,7 @@ def test_body_detections_validate_head_bbox_coordinate_system():
     assert detections.head_bbox_coordinate_system == "normalized"
 
 
-def test_body_detections_prefer_forehead_for_top_measurement_endpoint():
+def test_body_detections_keep_head_top_as_default_endpoint():
     detections = BodyDetections(
         keypoints={"head_top": Landmark(0.5, 0.2)},
         head_top=Landmark(0.5, 0.15),
@@ -317,7 +317,10 @@ def test_body_detections_prefer_forehead_for_top_measurement_endpoint():
         head_bbox=(0.4, 0.05, 0.6, 0.3),
     )
 
-    assert detections.top_measurement_endpoint() == detections.forehead_top
+    assert detections.top_measurement_endpoint() == detections.head_top
+    assert detections.top_measurement_endpoint(use_forehead_top=True) == (
+        detections.forehead_top
+    )
 
 
 def test_body_detections_do_not_derive_forehead_from_head_bbox():
