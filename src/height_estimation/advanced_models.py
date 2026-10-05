@@ -204,7 +204,6 @@ class BodyDetections:
     hand_confidences: tuple[float, ...] = ()
     segmentation_mask: Any | None = None
     head_bbox_coordinate_system: str = "pixel"
-    forehead_top: LandmarkValue | None = None
 
     def __post_init__(self) -> None:
         self.keypoints = {
@@ -213,7 +212,6 @@ class BodyDetections:
         }
         self.head_top = self._landmark_or_none(self.head_top)
         self.head_bottom = self._landmark_or_none(self.head_bottom)
-        self.forehead_top = self._landmark_or_none(self.forehead_top)
         self.hair_top = self._landmark_or_none(self.hair_top)
         self.hair_bottom = self._landmark_or_none(self.hair_bottom)
         self.head_confidence = _bounded_score(
@@ -273,15 +271,6 @@ class BodyDetections:
 
     def heel_points(self) -> tuple[Landmark, ...]:
         return self.heel_landmarks()
-
-    def top_measurement_endpoint(
-        self,
-        *,
-        use_forehead_top: bool = False,
-    ) -> Landmark | None:
-        if use_forehead_top and self.forehead_top is not None:
-            return self.forehead_top
-        return self.head_top or self.keypoints.get("head_top")
 
 
 @dataclass(frozen=True)
