@@ -52,6 +52,7 @@ class GeometricHeightEstimator:
             tuple[float, float], tuple[float, float]
         ] | None = None,
         quality: QualityAssessment | QualityMetrics | None = None,
+        use_forehead_top: bool = False,
     ) -> HeightEstimate | None:
         if metric_endpoints is not None:
             if not all(
@@ -81,7 +82,9 @@ class GeometricHeightEstimator:
         if not isfinite(cm_per_pixel or float("nan")) or (cm_per_pixel or 0) <= 0:
             return None
 
-        head_value = detections.head_top or detections.keypoints.get("head_top")
+        head_value = detections.top_measurement_endpoint(
+            use_forehead_top=use_forehead_top,
+        )
         if head_value is None:
             return None
 
@@ -112,6 +115,11 @@ class GeometricHeightEstimator:
             name.endswith("_heel") for name in detections.keypoints
         ) else "ankle"
         coordinate_system = head.coordinate_system
+        top_name = (
+            "forehead_top"
+            if use_forehead_top and detections.forehead_top is not None
+            else "head_top"
+        )
         return HeightEstimate(
             method=MeasurementMethod.GEOMETRIC,
             height_cm=height_cm,
@@ -120,7 +128,7 @@ class GeometricHeightEstimator:
             metadata={
                 "coordinate_system": coordinate_system,
                 "cm_per_pixel": cm_per_pixel,
-                "input_landmarks": ["head_top", f"{fallback}_landmarks"],
+                "input_landmarks": [top_name, f"{fallback}_landmarks"],
                 "endpoint_visibility": [
                     head.visibility,
                     max(landmark.visibility for landmark in heels),
@@ -142,11 +150,14 @@ class HeadBoundingBoxHeightEstimator:
         cm_per_pixel: float | None = None,
         image_size: tuple[int, int] | None = None,
         quality: QualityAssessment | QualityMetrics | None = None,
+        use_forehead_top: bool = False,
     ) -> HeightEstimate | None:
         if cm_per_pixel is None or not isfinite(cm_per_pixel) or cm_per_pixel <= 0:
             return None
 
-        top = detections.head_top
+        top = detections.top_measurement_endpoint(
+            use_forehead_top=use_forehead_top,
+        )
         bottom = detections.head_bottom
         approximation = True
         source = "head_bbox"
@@ -164,7 +175,11 @@ class HeadBoundingBoxHeightEstimator:
             except ValueError:
                 return None
             approximation = False
-            source = "head_landmarks"
+            source = (
+                "forehead_landmark"
+                if use_forehead_top and detections.forehead_top is not None
+                else "head_landmarks"
+            )
             completeness = 1.0
             visibility = min(top_landmark.visibility, bottom_landmark.visibility)
         elif detections.head_bbox is not None:
@@ -243,13 +258,17 @@ class AnthropometricHeightEstimator:
         cm_per_pixel: float | None = None,
         image_size: tuple[int, int] | None = None,
         quality: QualityAssessment | QualityMetrics | None = None,
+        use_forehead_top: bool = False,
     ) -> HeightEstimate | None:
         if cm_per_pixel is None or not isfinite(cm_per_pixel) or cm_per_pixel <= 0:
             return None
 
         landmarks = dict(detections.keypoints)
-        if detections.head_top is not None:
-            landmarks["head_top"] = detections.head_top
+        top = detections.top_measurement_endpoint(
+            use_forehead_top=use_forehead_top,
+        )
+        if top is not None:
+            landmarks["head_top"] = top
         if detections.head_bottom is not None:
             landmarks["head_bottom"] = detections.head_bottom
 
@@ -363,6 +382,7 @@ def estimate_independent_heights(
         tuple[float, float], tuple[float, float]
     ] | None = None,
     quality: QualityAssessment | QualityMetrics | None = None,
+    use_forehead_top: bool = False,
 ) -> tuple[HeightEstimate, ...]:
     """Run available independent estimators without fusing their outputs."""
     estimates: list[HeightEstimate] = []
@@ -372,6 +392,7 @@ def estimate_independent_heights(
         image_size=image_size,
         metric_endpoints=metric_endpoints,
         quality=quality,
+        use_forehead_top=use_forehead_top,
     )
     if geometric is not None:
         estimates.append(geometric)
@@ -381,6 +402,7 @@ def estimate_independent_heights(
         cm_per_pixel=cm_per_pixel,
         image_size=image_size,
         quality=quality,
+        use_forehead_top=use_forehead_top,
     )
     if head_bbox is not None:
         estimates.append(head_bbox)
@@ -390,6 +412,7 @@ def estimate_independent_heights(
         cm_per_pixel=cm_per_pixel,
         image_size=image_size,
         quality=quality,
+        use_forehead_top=use_forehead_top,
     )
     if anthropometric is not None:
         estimates.append(anthropometric)

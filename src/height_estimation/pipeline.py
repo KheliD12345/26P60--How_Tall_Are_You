@@ -109,6 +109,7 @@ class PipelineConfig:
     intermediate_output_dir: Path | None = None
     write_intermediate_outputs: bool = False
     body_detection: BodyDetectionConfig | None = None
+    use_forehead_top: bool = False
 
     def __post_init__(self) -> None:
         if self.quality_policy not in {"fail", "continue"}:
@@ -122,6 +123,8 @@ class PipelineConfig:
             BodyDetectionConfig,
         ):
             raise TypeError("body_detection must be a BodyDetectionConfig")
+        if not isinstance(self.use_forehead_top, bool):
+            raise TypeError("use_forehead_top must be a boolean")
         output_path = None if self.output_path is None else Path(self.output_path)
         intermediate_dir = (
             None
@@ -348,13 +351,18 @@ class _BodyDetectionStage:
 
 
 class _EstimationStage:
-    @staticmethod
+    def __init__(self, *, use_forehead_top: bool) -> None:
+        self.use_forehead_top = use_forehead_top
+
     def _metric_endpoints(
+        self,
         detections: BodyDetections,
         homography: tuple[tuple[float, float, float], ...],
         image_size: tuple[int, int],
     ) -> tuple[tuple[float, float], tuple[float, float]] | None:
-        head = detections.head_top or detections.keypoints.get("head_top")
+        head = detections.top_measurement_endpoint(
+            use_forehead_top=self.use_forehead_top,
+        )
         heels = detections.heel_landmarks()
         if head is None or not heels:
             return None
@@ -409,6 +417,7 @@ class _EstimationStage:
             image_size=image_size,
             metric_endpoints=metric_endpoints,
             quality=quality,
+            use_forehead_top=self.use_forehead_top,
         )
 
 
@@ -440,7 +449,9 @@ def default_pipeline_dependencies(
             use_person_fallback=pipeline_config.use_person_fallback,
             configuration=pipeline_config.body_detection,
         ),
-        estimation=_EstimationStage(),
+        estimation=_EstimationStage(
+            use_forehead_top=pipeline_config.use_forehead_top,
+        ),
         fusion=_FusionStage(
             confidence_level=pipeline_config.confidence_level,
         ),
