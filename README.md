@@ -83,6 +83,7 @@ detector packages are available.
 ```python
 from height_estimation.body_detection import (
 	BodyDetectionConfig,
+	MediaPipeFaceLandmarkDetectorAdapter,
 	MediaPipeHandDetectorAdapter,
 	MediaPipeSegmentationAdapter,
 	VGGHeadsDetectorAdapter,
@@ -95,6 +96,7 @@ config = PipelineConfig(
 	body_detection=BodyDetectionConfig(
 		pose_detector=ViTPoseDetectorAdapter(),
 		head_detector=VGGHeadsDetectorAdapter(),
+		forehead_detector=MediaPipeFaceLandmarkDetectorAdapter(),
 		segmentation_detector=MediaPipeSegmentationAdapter(),
 		hand_detector=MediaPipeHandDetectorAdapter(),
 	),
@@ -105,6 +107,11 @@ When an optional dependency or model file is unavailable, the corresponding
 detector returns an unavailable status and the pipeline continues to use
 available evidence. Runtime detector errors remain failure statuses and are
 included in diagnostics.
+
+The explicit `forehead_top` landmark is collected separately but is disabled
+for height measurement by default. Pass `--use-forehead-top` or set
+`PipelineConfig(use_forehead_top=True)` only when that endpoint is explicitly
+desired. The default pipeline continues to use `head_top`.
 
 Model weights are downloaded by the external detector implementations when
 first used. Configure model paths and network access before running a

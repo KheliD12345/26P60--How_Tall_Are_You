@@ -197,11 +197,13 @@ def test_body_detections_normalises_keypoints_and_falls_back_per_side():
         },
         head_top=(15.0, 5.0),
         head_bottom=(15.0, 25.0),
+        forehead_top=(15.0, 8.0),
         head_confidence=0.95,
     )
 
     assert detections.head_top == Landmark(15.0, 5.0)
     assert detections.head_bottom == Landmark(15.0, 25.0)
+    assert detections.forehead_top == Landmark(15.0, 8.0)
     assert detections.head_confidence == 0.95
     assert detections.head_bbox_coordinate_system == "pixel"
     assert detections.heel_landmarks() == (
@@ -305,6 +307,29 @@ def test_body_detections_validate_head_bbox_coordinate_system():
     )
 
     assert detections.head_bbox_coordinate_system == "normalized"
+
+
+def test_body_detections_keep_head_top_as_default_endpoint():
+    detections = BodyDetections(
+        keypoints={"head_top": Landmark(0.5, 0.2)},
+        head_top=Landmark(0.5, 0.15),
+        forehead_top=Landmark(0.5, 0.1),
+        head_bbox=(0.4, 0.05, 0.6, 0.3),
+    )
+
+    assert detections.top_measurement_endpoint() == detections.head_top
+    assert detections.top_measurement_endpoint(use_forehead_top=True) == (
+        detections.forehead_top
+    )
+
+
+def test_body_detections_do_not_derive_forehead_from_head_bbox():
+    detections = BodyDetections(
+        head_bbox=(0.4, 0.05, 0.6, 0.3),
+    )
+
+    assert detections.forehead_top is None
+    assert detections.top_measurement_endpoint() is None
 
     with pytest.raises(ValueError):
         BodyDetections(head_bbox_coordinate_system="camera")

@@ -5,13 +5,17 @@ import pytest
 
 from height_estimation.advanced_models import (
     AdvancedMeasurementResult,
+    BodyDetections,
     HeightEstimate,
+    Landmark,
     MeasurementMethod,
     MeasurementResult,
     QualityAssessment,
     QualityLevel,
     QualityMetrics,
 )
+from height_estimation.body_detection import BodyDetectionResult
+from height_estimation.estimators import estimate_independent_heights
 from height_estimation.models import (
     CalibrationResult,
     HomographyResult,
@@ -181,3 +185,43 @@ def test_calibration_serialisation_remains_compatible():
     assert set(payload) == {"markers", "geometry", "scale", "homography", "person"}
     assert payload["person"]["height_cm"] == 17.9
     assert json.loads(json.dumps(payload)) == payload
+
+
+def test_forehead_contract_stays_distinct_from_head_bbox_top_across_estimators():
+    detections = BodyDetections(
+        head_top=Landmark(0.5, 0.05),
+        forehead_top=Landmark(0.5, 0.1, 0.9),
+        head_bottom=Landmark(0.5, 0.25),
+        head_bbox=(0.4, 0.05, 0.6, 0.25),
+        head_confidence=0.9,
+        keypoints={"left_heel": Landmark(0.5, 0.9)},
+    )
+
+    estimates = estimate_independent_heights(
+        detections,
+        cm_per_pixel=1.0,
+        image_size=(100, 100),
+        use_forehead_top=True,
+    )
+    by_method = {estimate.method: estimate for estimate in estimates}
+
+    assert (
+        by_method[MeasurementMethod.GEOMETRIC].metadata["input_landmarks"][0]
+        == "forehead_top"
+    )
+    assert (
+        by_method[MeasurementMethod.HEAD_BBOX].metadata["source"]
+        == "forehead_landmark"
+    )
+    assert detections.top_measurement_endpoint(use_forehead_top=True) == detections.forehead_top
+
+    payload = BodyDetectionResult(detections=detections).to_dict()
+    assert payload["detections"]["head_top"]["y"] == 0.05
+    assert payload["detections"]["forehead_top"]["y"] == 0.1
+
+    bbox_only = BodyDetections(
+        head_bbox=(0.4, 0.05, 0.6, 0.25),
+        head_confidence=0.9,
+    )
+    assert bbox_only.forehead_top is None
+    assert bbox_only.top_measurement_endpoint() is None
