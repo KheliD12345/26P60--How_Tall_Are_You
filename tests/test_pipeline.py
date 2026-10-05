@@ -10,7 +10,6 @@ import json
 from height_estimation.advanced_models import (
     BodyDetections,
     HeightEstimate,
-    Landmark,
     MeasurementMethod,
     MeasurementResult,
     QualityAssessment,
@@ -21,7 +20,6 @@ from height_estimation.body_detection import (
     BodyDetectionResult,
     DetectionStatus,
     DetectorResult,
-    MediaPipeFaceLandmarkDetectorAdapter,
     MediaPipeHandDetectorAdapter,
     MediaPipeSegmentationAdapter,
     PoseDetectorAdapter,
@@ -250,38 +248,6 @@ def test_default_estimation_prefers_calibrated_metric_endpoints():
     assert estimates[0].metadata["input_endpoints"] == [
         [50.0, 20.0],
         [50.0, 180.0],
-    ]
-
-
-def test_forehead_estimation_can_be_enabled_explicitly():
-    calibration = CalibrationResult(
-        markers=(),
-        geometry=(),
-        cm_per_pixel=1.0,
-        homography=HomographyResult(
-            matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
-            reprojection_error_cm=0.0,
-        ),
-    )
-    detections = BodyDetections(
-        head_top=Landmark(0.5, 0.2),
-        forehead_top=Landmark(0.5, 0.1),
-        keypoints={"left_heel": Landmark(0.5, 0.9)},
-    )
-
-    estimates = default_pipeline_dependencies(
-        PipelineConfig(use_forehead_top=True)
-    ).estimation.run(
-        detections,
-        calibration=calibration,
-        quality=make_quality(),
-        image_size=(100, 100),
-    )
-
-    assert estimates[0].method is MeasurementMethod.GEOMETRIC
-    assert estimates[0].metadata["input_endpoints"] == [
-        [50.0, 10.0],
-        [50.0, 90.0],
     ]
 
 
@@ -787,7 +753,6 @@ def test_default_pipeline_dependencies_merge_optional_adapter_outputs():
     constructions = {
         "pose": 0,
         "head": 0,
-        "forehead": 0,
         "segmentation": 0,
         "hands": 0,
     }
@@ -839,21 +804,6 @@ def test_default_pipeline_dependencies_merge_optional_adapter_outputs():
                 "confidence": 0.88,
             }
 
-    class StubForeheadDetector:
-        def detect(self, image):
-            return {
-                "face_landmarks": [
-                    [
-                        {
-                            "x": 0.5,
-                            "y": index / 100.0,
-                            "visibility": 0.9,
-                        }
-                        for index in range(11)
-                    ]
-                ]
-            }
-
     class StubSegmenter:
         def segment(self, image, *, return_mask=False):
             assert return_mask is True
@@ -896,10 +846,6 @@ def test_default_pipeline_dependencies_merge_optional_adapter_outputs():
         constructions["head"] += 1
         return StubHeadDetector()
 
-    def forehead_factory():
-        constructions["forehead"] += 1
-        return StubForeheadDetector()
-
     def segmentation_factory():
         constructions["segmentation"] += 1
         return StubSegmenter()
@@ -913,9 +859,6 @@ def test_default_pipeline_dependencies_merge_optional_adapter_outputs():
         body_detection=BodyDetectionConfig(
             pose_detector=ViTPoseDetectorAdapter(pose_factory),
             head_detector=VGGHeadsDetectorAdapter(head_factory),
-            forehead_detector=MediaPipeFaceLandmarkDetectorAdapter(
-                forehead_factory
-            ),
             segmentation_detector=MediaPipeSegmentationAdapter(segmentation_factory),
             hand_detector=MediaPipeHandDetectorAdapter(hand_factory),
         ),
@@ -931,7 +874,6 @@ def test_default_pipeline_dependencies_merge_optional_adapter_outputs():
     assert constructions == {
         "pose": 1,
         "head": 1,
-        "forehead": 1,
         "segmentation": 1,
         "hands": 1,
     }
@@ -940,8 +882,6 @@ def test_default_pipeline_dependencies_merge_optional_adapter_outputs():
     assert first.detections.head_bbox == (18.0, 6.0, 30.0, 20.0)
     assert first.detections.head_top.coordinate_system == "pixel"
     assert first.detections.head_bottom.coordinate_system == "pixel"
-    assert first.detections.forehead_top == Landmark(0.5, 0.1, 0.9)
-    assert first.detections.forehead_top.coordinate_system == "normalized"
     assert np.array_equal(first.detections.segmentation_mask, mask)
     assert first.detections.hair_top.y == pytest.approx(0.08)
     assert first.detections.handedness == ("left", "right")

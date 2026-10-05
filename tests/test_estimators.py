@@ -50,32 +50,6 @@ def test_geometric_estimator_uses_head_and_heel_pixels():
     assert estimate.metadata["coordinate_system"] == "pixel"
 
 
-def test_geometric_estimator_keeps_head_top_by_default():
-    detections = BodyDetections(
-        head_top=Landmark(100.0, 20.0, normalized=False),
-        forehead_top=Landmark(100.0, 10.0, normalized=False),
-        keypoints={"left_heel": Landmark(101.0, 220.0, normalized=False)},
-    )
-
-    estimate = GeometricHeightEstimator().estimate(
-        detections,
-        cm_per_pixel=0.8,
-    )
-
-    assert estimate is not None
-    assert estimate.height_cm == pytest.approx(160.0)
-
-    forehead_estimate = GeometricHeightEstimator().estimate(
-        detections,
-        cm_per_pixel=0.8,
-        use_forehead_top=True,
-    )
-    assert forehead_estimate is not None
-    assert forehead_estimate.height_cm == pytest.approx(168.0)
-    assert estimate.metadata["input_landmarks"][0] == "head_top"
-    assert forehead_estimate.metadata["input_landmarks"][0] == "forehead_top"
-
-
 def test_estimators_accept_quality_metrics_directly():
     detections = BodyDetections(
         head_top=Landmark(100.0, 20.0, normalized=False),
@@ -166,45 +140,11 @@ def test_head_bbox_estimator_prefers_explicit_head_landmarks():
     estimate = HeadBoundingBoxHeightEstimator().estimate(
         detections,
         cm_per_pixel=0.5,
-        use_forehead_top=True,
     )
 
     assert estimate is not None
     assert estimate.height_cm == pytest.approx(30.0 / 0.13)
     assert estimate.metadata["approximation"] is False
-
-
-def test_head_bbox_estimator_prefers_forehead_top():
-    detections = BodyDetections(
-        head_bbox=(40.0, 20.0, 80.0, 70.0),
-        forehead_top=Landmark(60.0, 10.0, normalized=False),
-        head_bottom=Landmark(60.0, 70.0, normalized=False),
-        head_confidence=0.8,
-    )
-
-    estimate = HeadBoundingBoxHeightEstimator().estimate(
-        detections,
-        cm_per_pixel=0.5,
-        use_forehead_top=True,
-    )
-
-    assert estimate is not None
-    assert estimate.height_cm == pytest.approx(30.0 / 0.13)
-    assert estimate.metadata["source"] == "forehead_landmark"
-
-
-def test_head_bbox_estimator_keeps_bbox_top_as_approximation():
-    estimate = HeadBoundingBoxHeightEstimator().estimate(
-        BodyDetections(
-            head_bbox=(40.0, 20.0, 80.0, 70.0),
-            head_confidence=0.8,
-        ),
-        cm_per_pixel=0.5,
-    )
-
-    assert estimate is not None
-    assert estimate.metadata["source"] == "head_bbox"
-    assert estimate.metadata["approximation"] is True
 
 
 def test_head_bbox_confidence_tracks_head_detection_confidence():
@@ -254,26 +194,6 @@ def test_anthropometric_estimator_uses_head_ratio():
     assert estimate.height_cm == pytest.approx(100.0)
     assert "head" in estimate.metadata["measurements_used"]
     assert estimate.confidence < 1.0
-
-
-def test_anthropometric_estimator_prefers_forehead_top_for_head_segment():
-    detections = BodyDetections(
-        head_top=Landmark(0.5, 0.2),
-        forehead_top=Landmark(0.5, 0.1),
-        head_bottom=Landmark(0.5, 0.23),
-    )
-
-    estimate = AnthropometricHeightEstimator().estimate(
-        detections,
-        cm_per_pixel=1.0,
-        image_size=(100, 100),
-        quality=high_quality(),
-        use_forehead_top=True,
-    )
-
-    assert estimate is not None
-    assert estimate.height_cm == pytest.approx(100.0)
-    assert estimate.metadata["measurements_used"] == ["head"]
 
 
 def test_anthropometric_estimator_uses_available_arm_segment():
