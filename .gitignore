@@ -10,4 +10,5 @@ dist/
 outputs/
 .vscode/
 inputs/
-experimental/results/*
+experimental/results/
+experimental/inputs/

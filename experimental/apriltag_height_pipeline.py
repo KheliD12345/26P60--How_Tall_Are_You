@@ -1,18 +1,18 @@
-"""Estimate subject height from two AprilTags and direct pose endpoints.
+"""Estimate subject height from two fiducial markers and direct pose endpoints.
 
-The default run is intentionally limited to the two JPEGs in this folder.
-It uses the 81 cm centre-to-centre distance between AprilTag IDs 0 and 1 as
-the local metric scale. Subject endpoints are the top and bottom of the
-selected pose person box. No head-height ratio or anthropometric estimate is
-used.
+The marker type is selected at runtime with ``--marker-type``. The default
+run processes the two JPEGs in this folder as AprilTag images. Both modes use
+the 81 cm centre-to-centre distance between marker IDs 0 and 1 as the local
+metric scale. Subject endpoints are the top and bottom of the selected pose
+person box. No head-height ratio or anthropometric estimate is used.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass
-from math import degrees, hypot
+from dataclasses import dataclass
+from math import atan2, degrees, hypot
 from pathlib import Path
 
 import cv2
@@ -24,10 +24,32 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_DISTANCE_CM = 81.0
 REFERENCE_IDS = (0, 1)
 POSE_MODEL_NAME = "yolo11n-pose.pt"
+DEFAULT_MARKER_TYPE = "apriltag"
 IMAGE_NAMES = (
     "WhatsApp Image 2026-10-05 at 5.12.58 PM (1).jpeg",
     "WhatsApp Image 2026-10-05 at 5.12.58 PM.jpeg",
 )
+
+
+@dataclass(frozen=True)
+class MarkerConfig:
+    marker_type: str
+    dictionary_name: str
+    display_name: str
+
+
+MARKER_CONFIGS = {
+    "aruco": MarkerConfig(
+        marker_type="aruco",
+        dictionary_name="DICT_4X4_50",
+        display_name="ArUco",
+    ),
+    "apriltag": MarkerConfig(
+        marker_type="apriltag",
+        dictionary_name="DICT_APRILTAG_36h11",
+        display_name="AprilTag",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -50,20 +72,28 @@ def _point_dict(point: tuple[float, float]) -> dict[str, float]:
     return {"x_px": round(point[0], 3), "y_px": round(point[1], 3)}
 
 
-def detect_reference_markers(image: np.ndarray) -> tuple[MarkerDetection, ...]:
-    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+def detect_reference_markers(
+    image: np.ndarray,
+    config: MarkerConfig,
+) -> tuple[MarkerDetection, ...]:
+    dictionary_id = getattr(cv2.aruco, config.dictionary_name)
+    dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
     parameters = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(dictionary, parameters)
     corners, ids, _ = detector.detectMarkers(image)
     if ids is None:
-        raise ValueError("no DICT_APRILTAG_36h11 markers were detected")
+        raise ValueError(
+            f"no {config.dictionary_name} {config.display_name} markers were detected"
+        )
 
     detections: dict[int, MarkerDetection] = {}
     for raw_corners, raw_id in zip(corners, ids.flatten().tolist()):
         points = np.asarray(raw_corners, dtype=np.float64).reshape(4, 2)
         marker_id = int(raw_id)
         if marker_id in detections:
-            raise ValueError(f"duplicate AprilTag ID detected: {marker_id}")
+            raise ValueError(
+                f"duplicate {config.display_name} ID detected: {marker_id}"
+            )
         detections[marker_id] = MarkerDetection(
             id=marker_id,
             corners=tuple((float(x), float(y)) for x, y in points),
@@ -73,7 +103,10 @@ def detect_reference_markers(image: np.ndarray) -> tuple[MarkerDetection, ...]:
 
     missing = [marker_id for marker_id in REFERENCE_IDS if marker_id not in detections]
     if missing:
-        raise ValueError(f"missing required AprilTag IDs: {', '.join(map(str, missing))}")
+        raise ValueError(
+            f"missing required {config.display_name} IDs: "
+            f"{', '.join(map(str, missing))}"
+        )
     return tuple(detections[marker_id] for marker_id in REFERENCE_IDS)
 
 
@@ -112,7 +145,7 @@ def estimate_height(
     reference_dy = second_center[1] - first_center[1]
     reference_pixels = hypot(reference_dx, reference_dy)
     if reference_pixels <= 0.0:
-        raise ValueError("AprilTag centres must be separated in the image")
+        raise ValueError("reference marker centres must be separated in the image")
 
     cm_per_pixel = REFERENCE_DISTANCE_CM / reference_pixels
     height_pixels = abs(subject.feet_bottom[1] - subject.head_top[1])
@@ -124,7 +157,10 @@ def estimate_height(
             "x": round(reference_dx, 3),
             "y": round(reference_dy, 3),
         },
-        "reference_axis_angle_degrees": round(degrees(np.arctan2(reference_dy, reference_dx)), 3),
+        "reference_axis_angle_degrees": round(
+            degrees(atan2(reference_dy, reference_dx)),
+            3,
+        ),
         "cm_per_pixel": round(cm_per_pixel, 6),
         "subject_height_pixels": round(height_pixels, 3),
         "height_cm": round(height_cm, 2),
@@ -139,6 +175,7 @@ def write_overlay(
     markers: tuple[MarkerDetection, MarkerDetection],
     subject: SubjectEndpoints,
     height: dict[str, object],
+    config: MarkerConfig,
     output_path: Path,
 ) -> None:
     overlay = image.copy()
@@ -149,7 +186,7 @@ def write_overlay(
         cv2.circle(overlay, center, 7, (0, 180, 0), -1)
         cv2.putText(
             overlay,
-            f"AprilTag {marker.id}",
+            f"{config.display_name} {marker.id}",
             (center[0] + 10, center[1] - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
@@ -186,18 +223,24 @@ def write_overlay(
         raise OSError(f"could not write overlay: {output_path}")
 
 
-def process_image(model: YOLO, image_path: Path, output_dir: Path) -> dict[str, object]:
+def process_image(
+    model: YOLO,
+    image_path: Path,
+    output_dir: Path,
+    config: MarkerConfig,
+) -> dict[str, object]:
     image = cv2.imread(str(image_path))
     if image is None:
         raise OSError(f"could not read image: {image_path}")
-    markers = detect_reference_markers(image)
+    markers = detect_reference_markers(image, config)
     subject = detect_subject(model, image)
     height = estimate_height(markers, subject)
     result = {
         "image": image_path.name,
         "image_size_px": {"width": image.shape[1], "height": image.shape[0]},
         "detector": {
-            "marker_family": "DICT_APRILTAG_36h11",
+            "marker_type": config.marker_type,
+            "marker_family": config.dictionary_name,
             "required_ids": list(REFERENCE_IDS),
             "subject_model": POSE_MODEL_NAME,
             "subject_confidence": round(subject.confidence, 4),
@@ -227,6 +270,7 @@ def process_image(model: YOLO, image_path: Path, output_dir: Path) -> dict[str, 
         markers,
         subject,
         height,
+        config,
         output_dir / f"{image_path.stem}_overlay.jpg",
     )
     return result
@@ -234,6 +278,23 @@ def process_image(model: YOLO, image_path: Path, output_dir: Path) -> dict[str, 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--marker-type",
+        "--marker-family",
+        dest="marker_type",
+        choices=tuple(MARKER_CONFIGS),
+        default=DEFAULT_MARKER_TYPE,
+        help=(
+            "fiducial marker family to detect; aruco uses DICT_4X4_50 and "
+            "apriltag uses DICT_APRILTAG_36h11"
+        ),
+    )
+    parser.add_argument(
+        "images",
+        nargs="*",
+        type=Path,
+        help="image paths; defaults to the two JPEGs in this folder",
+    )
     parser.add_argument(
         "--model",
         type=Path,
@@ -243,15 +304,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=SCRIPT_DIR / "results",
-        help="directory for JSON results and annotated images",
+        default=None,
+        help=(
+            "directory for JSON results and annotated images; defaults to "
+            "experimental/results/<marker-type>"
+        ),
     )
     return parser.parse_args()
 
 
+def _resolve_path(path: Path) -> Path:
+    if path.is_file() or path.is_absolute():
+        return path
+    local_path = SCRIPT_DIR / path
+    return local_path if local_path.is_file() else path
+
+
 def main() -> int:
     args = parse_args()
-    image_paths = tuple(SCRIPT_DIR / name for name in IMAGE_NAMES)
+    config = MARKER_CONFIGS[args.marker_type]
+    requested_images = args.images or [Path(name) for name in IMAGE_NAMES]
+    image_paths = tuple(_resolve_path(path) for path in requested_images)
     missing_images = [path.name for path in image_paths if not path.is_file()]
     if missing_images:
         raise SystemExit(f"missing required test image(s): {', '.join(missing_images)}")
@@ -262,8 +335,9 @@ def main() -> int:
         )
 
     model = YOLO(str(args.model))
-    results = [process_image(model, path, args.output_dir) for path in image_paths]
-    summary_path = args.output_dir / "summary.json"
+    output_dir = args.output_dir or SCRIPT_DIR / "results" / args.marker_type
+    results = [process_image(model, path, output_dir, config) for path in image_paths]
+    summary_path = output_dir / "summary.json"
     summary_path.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     for result in results:
         estimate = result["estimate"]
@@ -273,7 +347,8 @@ def main() -> int:
             f"({estimate['subject_height_pixels']:.2f} px, "
             f"{estimate['cm_per_pixel']:.6f} cm/px)"
         )
-    print(f"Wrote results to {args.output_dir}")
+    print(f"Marker type: {config.marker_type} ({config.dictionary_name})")
+    print(f"Wrote results to {output_dir}")
     return 0
 
 
