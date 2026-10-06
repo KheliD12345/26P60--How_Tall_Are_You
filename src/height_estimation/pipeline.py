@@ -297,11 +297,15 @@ class PipelineDependencies:
 
 
 class _CalibrationStage:
+    def __init__(self, *, use_person_fallback: bool) -> None:
+        self.use_person_fallback = use_person_fallback
+
     def run(self, pipeline_input: PipelineInput) -> CalibrationResult:
         return calibrate_image(
             pipeline_input.image_path,
             pipeline_input.layout,
             camera_calibration_path=pipeline_input.camera_calibration_path,
+            use_person_fallback=self.use_person_fallback,
         )
 
 
@@ -434,7 +438,9 @@ def default_pipeline_dependencies(
 ) -> PipelineDependencies:
     pipeline_config = config or PipelineConfig()
     return PipelineDependencies(
-        calibration=_CalibrationStage(),
+        calibration=_CalibrationStage(
+            use_person_fallback=pipeline_config.use_person_fallback,
+        ),
         quality=_QualityStage(),
         body_detection=_BodyDetectionStage(
             use_person_fallback=pipeline_config.use_person_fallback,

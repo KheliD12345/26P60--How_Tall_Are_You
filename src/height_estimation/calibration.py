@@ -23,6 +23,7 @@ def calibrate_image(
     layout: MarkerLayout,
     camera_calibration: CameraCalibration | None = None,
     camera_calibration_path: str | Path | None = None,
+    use_person_fallback: bool = True,
 ) -> CalibrationResult:
     if camera_calibration is not None and camera_calibration_path is not None:
         raise ValueError(
@@ -44,6 +45,9 @@ def calibrate_image(
             layout,
         )
     validate_markers(markers, layout)
+    markers = tuple(
+        marker for marker in markers if marker.id in layout.marker_ids
+    )
     geometry = calculate_pairwise_geometry(markers, layout)
     cm_per_pixel = estimate_cm_per_pixel(
         geometry,
@@ -51,9 +55,11 @@ def calibrate_image(
         marker_size_cm=layout.marker_size_cm,
     )
     homography = estimate_homography(markers, layout)
-    person = detect_person_endpoints(
-        working_image if working_image is not None else image_path
-    )
+    person = None
+    if use_person_fallback:
+        person = detect_person_endpoints(
+            working_image if working_image is not None else image_path
+        )
     perspective_height_cm = None
     if person is not None:
         head, feet = transform_person_endpoints(person, homography.matrix)

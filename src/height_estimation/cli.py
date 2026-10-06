@@ -23,7 +23,7 @@ DEFAULT_LAYOUT = Path(__file__).resolve().parents[2] / "configs" / "marker_layou
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prepare a known ArUco marker layout for height estimation."
+        description="Prepare a known fiducial marker layout for height estimation."
     )
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument(
