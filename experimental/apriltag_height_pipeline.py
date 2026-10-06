@@ -1,17 +1,17 @@
 """Estimate subject height from two fiducial markers and direct pose endpoints.
 
 The marker type is selected at runtime with ``--marker-type``. The default
-run processes the two JPEGs in this folder as AprilTag images. Both modes use
-the 81 cm centre-to-centre distance between marker IDs 0 and 1 as the local
-metric scale. Subject endpoints are the top and bottom of the selected pose
-person box. No head-height ratio or anthropometric estimate is used.
+run processes the two hybrid JPEGs in the project ``inputs`` folder as
+AprilTag images. The AprilTag mode uses only IDs 4 and 5, which are 81 cm
+apart on the pole. Subject endpoints are the top and bottom of the selected
+pose person box. No head-height ratio or anthropometric estimate is used.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import atan2, degrees, hypot
 from pathlib import Path
 
@@ -22,12 +22,11 @@ from ultralytics import YOLO
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_DISTANCE_CM = 81.0
-REFERENCE_IDS = (0, 1)
 POSE_MODEL_NAME = "yolo11n-pose.pt"
 DEFAULT_MARKER_TYPE = "apriltag"
 IMAGE_NAMES = (
-    "WhatsApp Image 2026-10-05 at 5.12.58 PM (1).jpeg",
-    "WhatsApp Image 2026-10-05 at 5.12.58 PM.jpeg",
+    "ApriltagHybrid1.jpg",
+    "ApriltagHybrid2.jpg",
 )
 
 
@@ -36,6 +35,7 @@ class MarkerConfig:
     marker_type: str
     dictionary_name: str
     display_name: str
+    reference_ids: tuple[int, int]
 
 
 MARKER_CONFIGS = {
@@ -43,11 +43,13 @@ MARKER_CONFIGS = {
         marker_type="aruco",
         dictionary_name="DICT_4X4_50",
         display_name="ArUco",
+        reference_ids=(0, 1),
     ),
     "apriltag": MarkerConfig(
         marker_type="apriltag",
         dictionary_name="DICT_APRILTAG_36h11",
         display_name="AprilTag",
+        reference_ids=(4, 5),
     ),
 }
 
@@ -101,13 +103,17 @@ def detect_reference_markers(
             area_px=float(abs(cv2.contourArea(points.astype(np.float32)))),
         )
 
-    missing = [marker_id for marker_id in REFERENCE_IDS if marker_id not in detections]
+    missing = [
+        marker_id
+        for marker_id in config.reference_ids
+        if marker_id not in detections
+    ]
     if missing:
         raise ValueError(
             f"missing required {config.display_name} IDs: "
             f"{', '.join(map(str, missing))}"
         )
-    return tuple(detections[marker_id] for marker_id in REFERENCE_IDS)
+    return tuple(detections[marker_id] for marker_id in config.reference_ids)
 
 
 def detect_subject(model: YOLO, image: np.ndarray) -> SubjectEndpoints:
@@ -241,7 +247,7 @@ def process_image(
         "detector": {
             "marker_type": config.marker_type,
             "marker_family": config.dictionary_name,
-            "required_ids": list(REFERENCE_IDS),
+            "required_ids": list(config.reference_ids),
             "subject_model": POSE_MODEL_NAME,
             "subject_confidence": round(subject.confidence, 4),
         },
@@ -290,6 +296,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--reference-ids",
+        nargs=2,
+        type=int,
+        metavar=("ID_A", "ID_B"),
+        help=(
+            "override the two marker IDs used for the 81 cm scale; "
+            "AprilTag defaults to 4 5 and ArUco defaults to 0 1"
+        ),
+    )
+    parser.add_argument(
         "images",
         nargs="*",
         type=Path,
@@ -323,7 +339,14 @@ def _resolve_path(path: Path) -> Path:
 def main() -> int:
     args = parse_args()
     config = MARKER_CONFIGS[args.marker_type]
-    requested_images = args.images or [Path(name) for name in IMAGE_NAMES]
+    if args.reference_ids is not None:
+        reference_ids = tuple(args.reference_ids)
+        if reference_ids[0] == reference_ids[1]:
+            raise SystemExit("reference IDs must be different")
+        config = replace(config, reference_ids=reference_ids)
+    requested_images = args.images or [
+        SCRIPT_DIR.parent / "inputs" / name for name in IMAGE_NAMES
+    ]
     image_paths = tuple(_resolve_path(path) for path in requested_images)
     missing_images = [path.name for path in image_paths if not path.is_file()]
     if missing_images:

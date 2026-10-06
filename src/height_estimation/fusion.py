@@ -17,7 +17,6 @@ from .advanced_models import (
 DEFAULT_BASE_WEIGHTS = {
     MeasurementMethod.GEOMETRIC.value: 0.5,
     MeasurementMethod.HEAD_BBOX.value: 0.2,
-    MeasurementMethod.ANTHROPOMETRIC.value: 0.3,
 }
 
 SUPPORTED_FUSION_METHODS = frozenset(DEFAULT_BASE_WEIGHTS)
@@ -167,6 +166,10 @@ class MeasurementFusionEngine:
             raise ValueError("duplicate estimate methods are not supported")
         if MeasurementMethod.SMPL_BASED.value in methods:
             raise ValueError("SMPL estimates require a real fitted estimator")
+        unsupported_methods = set(methods).difference(SUPPORTED_FUSION_METHODS)
+        if unsupported_methods:
+            unsupported = ", ".join(sorted(unsupported_methods))
+            raise ValueError(f"unsupported fusion method: {unsupported}")
 
         raw_weights: dict[str, float] = {}
         for estimate in valid_estimates:

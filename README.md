@@ -32,6 +32,28 @@ The calibration JSON contains detected markers, marker-pair geometry, the
 centimetres-per-pixel scale, homography diagnostics, and optional camera
 calibration metadata.
 
+## Hybrid AprilTag Layout
+
+The hybrid images contain four frame tags and two pole tags. The experimental
+runner uses only pole tags 4 and 5, whose centre-to-centre distance is 81 cm:
+
+```powershell
+python experimental/apriltag_height_pipeline.py
+```
+
+The main pipeline uses the AprilTag layout for frame tags 0 to 3:
+
+```powershell
+python -m height_estimation --pipeline --batch `
+	--quality-policy continue `
+	--layout configs/apriltag_hybrid_layout.json `
+	--output-dir outputs/apriltag-hybrid `
+	inputs/ApriltagHybrid1.jpg inputs/ApriltagHybrid2.jpg
+```
+
+The main calibration stage ignores detected marker IDs that are not declared
+by the selected layout, so pole tags 4 and 5 do not enter the frame homography.
+
 ## Full Pipeline
 
 Run the complete single-image pipeline explicitly with `--pipeline`:
@@ -50,6 +72,9 @@ height estimate, uncertainty interval, quality assessment, method estimates,
 fusion weights, diagnostics, and warnings. The process exits with status `2`
 when a typed pipeline failure occurs. Use `--quality-policy continue` to retain
 a result when the quality gate reports warnings.
+
+The default pipeline fuses geometric and head-bounding-box estimates only.
+Anthropometric estimates are not included in pipeline results.
 
 Use `--no-person-fallback` to require configured model-backed body detectors.
 This is useful for verifying detector availability without silently using the

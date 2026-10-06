@@ -385,13 +385,4 @@ def estimate_independent_heights(
     if head_bbox is not None:
         estimates.append(head_bbox)
 
-    anthropometric = AnthropometricHeightEstimator().estimate(
-        detections,
-        cm_per_pixel=cm_per_pixel,
-        image_size=image_size,
-        quality=quality,
-    )
-    if anthropometric is not None:
-        estimates.append(anthropometric)
-
     return tuple(estimates)

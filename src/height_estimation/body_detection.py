@@ -74,6 +74,7 @@ _POSE_METADATA_KEYS = {
     "metadata",
     "total_keypoints",
 }
+_VISIBILITY_EPSILON = 1e-3
 
 
 def _coordinate_system(value: object | None) -> str:
@@ -92,12 +93,21 @@ def _normalise_landmark(
     coordinate_system: str = "normalized",
 ) -> Landmark:
     system = _coordinate_system(coordinate_system)
+    normalised_value = value
     if isinstance(value, Mapping):
+        normalised_value = dict(value)
         local_system = value.get("coordinate_system")
         if local_system is None and "normalized" in value:
             local_system = "normalized" if value["normalized"] else "pixel"
         if local_system is not None:
             system = _coordinate_system(local_system)
+        for confidence_name in ("visibility", "confidence", "score"):
+            if confidence_name not in normalised_value:
+                continue
+            confidence = float(normalised_value[confidence_name])
+            if 0.0 <= confidence <= 1.0 + _VISIBILITY_EPSILON:
+                normalised_value[confidence_name] = min(1.0, confidence)
+            break
     else:
         local_system = getattr(value, "coordinate_system", None)
         if local_system is None and hasattr(value, "normalized"):
@@ -105,7 +115,7 @@ def _normalise_landmark(
         if local_system is not None:
             system = _coordinate_system(local_system)
     return Landmark.from_value(
-        value,
+        normalised_value,
         normalized=system == "normalized",
         coordinate_system=system,
     )
