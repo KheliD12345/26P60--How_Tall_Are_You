@@ -9,3 +9,5 @@ dist/
 *.egg-info/
 outputs/
 .vscode/
+inputs/
+experimental/results/*
