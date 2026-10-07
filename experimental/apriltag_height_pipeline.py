@@ -1,29 +1,37 @@
-"""Estimate subject height from two fiducial markers and direct pose endpoints.
+"""Compare frame-tag rectification with the independent stick-tag scale.
 
-The marker type is selected at runtime with ``--marker-type``. The default
-run processes the two hybrid JPEGs in the project ``inputs`` folder as
-AprilTag images. The AprilTag mode uses only IDs 4 and 5, which are 81 cm
-apart on the pole. Subject endpoints are the top and bottom of the selected
-pose person box. No head-height ratio or anthropometric estimate is used.
+The experimental runner uses the same ViTPose heel and VGGHeads head-top
+landmarks as the production pipeline. Four frame markers define the primary
+homography when available. A separate scale from stick markers 4 and 5 is
+reported as a calibration check.
 """
 
 from __future__ import annotations
-
 import argparse
 import json
 from dataclasses import dataclass, replace
-from math import atan2, degrees, hypot
+from math import atan2, degrees, hypot, isfinite
 from pathlib import Path
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
+
+from height_estimation.advanced_models import BodyDetections
+from height_estimation.aruco import detect_markers_for_dictionary
+from height_estimation.body_detection import (
+    BodyDetectionConfig,
+    BodyDetectionOrchestrator,
+    ViTPoseDetectorAdapter,
+    VGGHeadsDetectorAdapter,
+)
+from height_estimation.geometry import estimate_homography, transform_point
+from height_estimation.models import DetectedMarker, MarkerLayout
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_DISTANCE_CM = 81.0
-POSE_MODEL_NAME = "yolo11n-pose.pt"
 DEFAULT_MARKER_TYPE = "apriltag"
+FRAME_LAYOUT_PATH = SCRIPT_DIR.parent / "configs" / "apriltag_hybrid_layout.json"
 IMAGE_NAMES = (
     "ApriltagHybrid1.jpg",
     "ApriltagHybrid2.jpg",
@@ -36,6 +44,7 @@ class MarkerConfig:
     dictionary_name: str
     display_name: str
     reference_ids: tuple[int, int]
+    marker_size_cm: float
 
 
 MARKER_CONFIGS = {
@@ -44,12 +53,14 @@ MARKER_CONFIGS = {
         dictionary_name="DICT_4X4_50",
         display_name="ArUco",
         reference_ids=(0, 1),
+        marker_size_cm=18.0,
     ),
     "apriltag": MarkerConfig(
         marker_type="apriltag",
         dictionary_name="DICT_APRILTAG_36h11",
         display_name="AprilTag",
         reference_ids=(4, 5),
+        marker_size_cm=18.0,
     ),
 }
 
@@ -64,9 +75,8 @@ class MarkerDetection:
 
 @dataclass(frozen=True)
 class SubjectEndpoints:
-    box: tuple[float, float, float, float]
     head_top: tuple[float, float]
-    feet_bottom: tuple[float, float]
+    heel_points: tuple[tuple[float, float], ...]
     confidence: float
 
 
@@ -74,147 +84,234 @@ def _point_dict(point: tuple[float, float]) -> dict[str, float]:
     return {"x_px": round(point[0], 3), "y_px": round(point[1], 3)}
 
 
-def detect_reference_markers(
+def detect_markers(
     image: np.ndarray,
-    config: MarkerConfig,
+    dictionary_name: str,
+    marker_ids: tuple[int, ...],
+) -> dict[int, MarkerDetection]:
+    markers = detect_markers_for_dictionary(
+        image,
+        dictionary_name,
+        required_ids=marker_ids,
+    )
+    return {
+        marker.id: MarkerDetection(
+            id=marker.id,
+            corners=marker.corners,
+            center=(marker.center_x, marker.center_y),
+            area_px=marker.area_px,
+        )
+        for marker in markers
+        if marker.id in marker_ids
+    }
+
+
+def require_markers(
+    detections: dict[int, MarkerDetection],
+    marker_ids: tuple[int, ...],
+    label: str,
 ) -> tuple[MarkerDetection, ...]:
-    dictionary_id = getattr(cv2.aruco, config.dictionary_name)
-    dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
-    parameters = cv2.aruco.DetectorParameters()
-    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
-    corners, ids, _ = detector.detectMarkers(image)
-    if ids is None:
-        raise ValueError(
-            f"no {config.dictionary_name} {config.display_name} markers were detected"
-        )
-
-    detections: dict[int, MarkerDetection] = {}
-    for raw_corners, raw_id in zip(corners, ids.flatten().tolist()):
-        points = np.asarray(raw_corners, dtype=np.float64).reshape(4, 2)
-        marker_id = int(raw_id)
-        if marker_id in detections:
-            raise ValueError(
-                f"duplicate {config.display_name} ID detected: {marker_id}"
-            )
-        detections[marker_id] = MarkerDetection(
-            id=marker_id,
-            corners=tuple((float(x), float(y)) for x, y in points),
-            center=(float(points[:, 0].mean()), float(points[:, 1].mean())),
-            area_px=float(abs(cv2.contourArea(points.astype(np.float32)))),
-        )
-
-    missing = [
-        marker_id
-        for marker_id in config.reference_ids
-        if marker_id not in detections
-    ]
+    missing = [marker_id for marker_id in marker_ids if marker_id not in detections]
     if missing:
         raise ValueError(
-            f"missing required {config.display_name} IDs: "
-            f"{', '.join(map(str, missing))}"
+            f"missing required {label} IDs: {', '.join(map(str, missing))}"
         )
-    return tuple(detections[marker_id] for marker_id in config.reference_ids)
+    return tuple(detections[marker_id] for marker_id in marker_ids)
 
 
-def detect_subject(model: YOLO, image: np.ndarray) -> SubjectEndpoints:
-    result = model.predict(
-        source=image,
-        classes=[0],
-        conf=0.25,
-        verbose=False,
-    )[0]
-    if result.boxes is None or len(result.boxes) == 0:
-        raise ValueError("no person was detected")
+def detect_subject(
+    body_detector: BodyDetectionOrchestrator,
+    image: np.ndarray,
+) -> tuple[SubjectEndpoints, object]:
+    body_result = body_detector.detect(image)
+    detections: BodyDetections = body_result.detections
+    head = detections.head_top or detections.keypoints.get("head_top")
+    heels = detections.heel_landmarks()
+    if head is None or not heels:
+        details = "; ".join(body_result.diagnostics)
+        reason = "shared head-top and heel landmarks were not detected"
+        raise ValueError(f"{reason}: {details}" if details else reason)
 
-    candidates: list[tuple[float, float, tuple[float, float, float, float]]] = []
-    for box, confidence in zip(result.boxes.xyxy.tolist(), result.boxes.conf.tolist()):
-        x1, y1, x2, y2 = (float(value) for value in box)
-        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-        candidates.append((area, float(confidence), (x1, y1, x2, y2)))
-    _, confidence, box = max(candidates, key=lambda candidate: candidate[0] * candidate[1])
-    x1, y1, x2, y2 = box
-    center_x = (x1 + x2) / 2.0
-    return SubjectEndpoints(
-        box=box,
-        head_top=(center_x, y1),
-        feet_bottom=(center_x, y2),
-        confidence=confidence,
+    height, width = image.shape[:2]
+    head_top = head.to_pixel(width, height)
+    heel_points = tuple(heel.to_pixel(width, height) for heel in heels)
+    return (
+        SubjectEndpoints(
+            head_top=head_top,
+            heel_points=heel_points,
+            confidence=detections.head_confidence,
+        ),
+        body_result,
+    )
+
+
+def _detected_marker(marker: MarkerDetection) -> DetectedMarker:
+    return DetectedMarker(
+        id=marker.id,
+        corners=marker.corners,
+        center_x=marker.center[0],
+        center_y=marker.center[1],
+        area_px=marker.area_px,
     )
 
 
 def estimate_height(
-    markers: tuple[MarkerDetection, MarkerDetection],
+    frame_markers: dict[int, MarkerDetection],
+    stick_markers: tuple[MarkerDetection, MarkerDetection] | None,
     subject: SubjectEndpoints,
+    frame_layout: MarkerLayout,
 ) -> dict[str, object]:
-    first_center, second_center = markers[0].center, markers[1].center
-    reference_dx = second_center[0] - first_center[0]
-    reference_dy = second_center[1] - first_center[1]
-    reference_pixels = hypot(reference_dx, reference_dy)
-    if reference_pixels <= 0.0:
-        raise ValueError("reference marker centres must be separated in the image")
+    frame_height: float | None = None
+    frame_details: dict[str, object] | None = None
+    selected_heel = max(subject.heel_points, key=lambda point: point[1])
+    if all(marker_id in frame_markers for marker_id in frame_layout.marker_ids):
+        detected = tuple(
+            _detected_marker(frame_markers[marker_id])
+            for marker_id in frame_layout.marker_ids
+        )
+        homography = estimate_homography(detected, frame_layout)
+        head_metric = transform_point(subject.head_top, homography.matrix)
+        transformed_heels = tuple(
+            transform_point(point, homography.matrix)
+            for point in subject.heel_points
+        )
+        heel_index = max(
+            range(len(transformed_heels)),
+            key=lambda index: transformed_heels[index][1],
+        )
+        selected_heel = subject.heel_points[heel_index]
+        frame_height = abs(transformed_heels[heel_index][1] - head_metric[1])
+        frame_details = {
+            "height_cm": round(frame_height, 2),
+            "reprojection_error_cm": round(homography.reprojection_error_cm, 4),
+            "head_top_cm": {
+                "x": round(head_metric[0], 3),
+                "y": round(head_metric[1], 3),
+            },
+            "feet_bottom_cm": {
+                "x": round(transformed_heels[heel_index][0], 3),
+                "y": round(transformed_heels[heel_index][1], 3),
+            },
+        }
 
-    cm_per_pixel = REFERENCE_DISTANCE_CM / reference_pixels
-    height_pixels = abs(subject.feet_bottom[1] - subject.head_top[1])
-    height_cm = height_pixels * cm_per_pixel
+    height_pixels = abs(selected_heel[1] - subject.head_top[1])
+    stick_check: dict[str, object] | None = None
+    if stick_markers is not None:
+        first_center, second_center = stick_markers[0].center, stick_markers[1].center
+        reference_dx = second_center[0] - first_center[0]
+        reference_dy = second_center[1] - first_center[1]
+        reference_pixels = hypot(reference_dx, reference_dy)
+        if reference_pixels <= 0.0:
+            raise ValueError("reference marker centres must be separated in the image")
+
+        cm_per_pixel = REFERENCE_DISTANCE_CM / reference_pixels
+        stick_height_cm = height_pixels * cm_per_pixel
+        stick_check = {
+            "reference_distance_cm": REFERENCE_DISTANCE_CM,
+            "reference_distance_px": round(reference_pixels, 3),
+            "reference_delta_px": {
+                "x": round(reference_dx, 3),
+                "y": round(reference_dy, 3),
+            },
+            "reference_axis_angle_degrees": round(
+                degrees(atan2(reference_dy, reference_dx)),
+                3,
+            ),
+            "cm_per_pixel": round(cm_per_pixel, 6),
+            "height_cm": round(stick_height_cm, 2),
+            "difference_from_frame_homography_cm": (
+                round(stick_height_cm - frame_height, 2)
+                if frame_height is not None
+                else None
+            ),
+        }
+    elif frame_height is None:
+        raise ValueError(
+            "frame homography is unavailable and both stick markers are required "
+            "for fallback"
+        )
+
+    height_cm = frame_height if frame_height is not None else stick_check["height_cm"]
+    if not isfinite(height_cm) or height_cm <= 0:
+        raise ValueError("height estimate must be finite and greater than zero")
     return {
-        "reference_distance_cm": REFERENCE_DISTANCE_CM,
-        "reference_distance_px": round(reference_pixels, 3),
-        "reference_delta_px": {
-            "x": round(reference_dx, 3),
-            "y": round(reference_dy, 3),
-        },
-        "reference_axis_angle_degrees": round(
-            degrees(atan2(reference_dy, reference_dx)),
-            3,
+        "method": (
+            "four_frame_marker_homography"
+            if frame_height is not None
+            else "stick_marker_scalar_fallback"
         ),
-        "cm_per_pixel": round(cm_per_pixel, 6),
-        "subject_height_pixels": round(height_pixels, 3),
         "height_cm": round(height_cm, 2),
+        "subject_height_pixels": round(height_pixels, 3),
         "head_top": _point_dict(subject.head_top),
-        "feet_bottom": _point_dict(subject.feet_bottom),
-        "endpoint_method": "direct top and bottom of selected YOLO pose person box",
+        "feet_bottom": _point_dict(selected_heel),
+        "frame_homography": frame_details,
+        "stick_scale_check": stick_check,
+        "endpoint_method": "shared VGGHeads head-top and ViTPose heel landmarks",
     }
 
 
 def write_overlay(
     image: np.ndarray,
-    markers: tuple[MarkerDetection, MarkerDetection],
+    frame_markers: dict[int, MarkerDetection],
+    stick_markers: tuple[MarkerDetection, MarkerDetection] | None,
     subject: SubjectEndpoints,
     height: dict[str, object],
     config: MarkerConfig,
     output_path: Path,
 ) -> None:
     overlay = image.copy()
-    for marker in markers:
+    for marker in frame_markers.values():
         points = np.asarray(marker.corners, dtype=np.int32).reshape((-1, 1, 2))
-        cv2.polylines(overlay, [points], True, (0, 180, 0), 3)
+        cv2.polylines(overlay, [points], True, (255, 160, 0), 3)
         center = tuple(round(value) for value in marker.center)
-        cv2.circle(overlay, center, 7, (0, 180, 0), -1)
+        cv2.circle(overlay, center, 7, (255, 160, 0), -1)
         cv2.putText(
             overlay,
-            f"{config.display_name} {marker.id}",
+            f"Frame {marker.id}",
             (center[0] + 10, center[1] - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
-            (0, 120, 0),
+            (180, 90, 0),
             2,
             cv2.LINE_AA,
         )
 
-    first_center = tuple(round(value) for value in markers[0].center)
-    second_center = tuple(round(value) for value in markers[1].center)
-    cv2.line(overlay, first_center, second_center, (0, 180, 0), 3)
+    if stick_markers is not None:
+        for marker in stick_markers:
+            points = np.asarray(marker.corners, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(overlay, [points], True, (0, 180, 0), 3)
+            center = tuple(round(value) for value in marker.center)
+            cv2.circle(overlay, center, 7, (0, 180, 0), -1)
+            cv2.putText(
+                overlay,
+                f"{config.display_name} {marker.id}",
+                (center[0] + 10, center[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 120, 0),
+                2,
+                cv2.LINE_AA,
+            )
+        first_center = tuple(round(value) for value in stick_markers[0].center)
+        second_center = tuple(round(value) for value in stick_markers[1].center)
+        cv2.line(overlay, first_center, second_center, (0, 180, 0), 3)
 
-    x1, y1, x2, y2 = (round(value) for value in subject.box)
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), (255, 120, 0), 3)
     head = tuple(round(value) for value in subject.head_top)
-    feet = tuple(round(value) for value in subject.feet_bottom)
+    feet = tuple(round(value) for value in height["feet_bottom"].values())
     cv2.circle(overlay, head, 8, (0, 0, 255), -1)
     cv2.circle(overlay, feet, 8, (0, 0, 255), -1)
     cv2.line(overlay, head, feet, (0, 0, 255), 3)
 
-    label = f"height {height['height_cm']:.2f} cm | scale {height['cm_per_pixel']:.5f} cm/px"
-    cv2.rectangle(overlay, (20, 20), (750, 65), (255, 255, 255), -1)
+    stick_check = height["stick_scale_check"]
+    label = (
+        f"height {height['height_cm']:.2f} cm | "
+        + (
+            f"stick check {stick_check['height_cm']:.2f} cm"
+            if stick_check is not None
+            else "stick check unavailable"
+        )
+    )
+    cv2.rectangle(overlay, (20, 20), (900, 65), (255, 255, 255), -1)
     cv2.putText(
         overlay,
         label,
@@ -230,50 +327,79 @@ def write_overlay(
 
 
 def process_image(
-    model: YOLO,
+    body_detector: BodyDetectionOrchestrator,
     image_path: Path,
     output_dir: Path,
     config: MarkerConfig,
+    frame_layout: MarkerLayout,
 ) -> dict[str, object]:
     image = cv2.imread(str(image_path))
     if image is None:
         raise OSError(f"could not read image: {image_path}")
-    markers = detect_reference_markers(image, config)
-    subject = detect_subject(model, image)
-    height = estimate_height(markers, subject)
+    frame_markers = detect_markers(
+        image,
+        frame_layout.dictionary,
+        frame_layout.marker_ids,
+    )
+    stick_detections = detect_markers(
+        image,
+        config.dictionary_name,
+        config.reference_ids,
+    )
+    stick_markers = (
+        tuple(stick_detections[marker_id] for marker_id in config.reference_ids)
+        if all(marker_id in stick_detections for marker_id in config.reference_ids)
+        else None
+    )
+    subject, body_result = detect_subject(body_detector, image)
+    frame_is_complete = all(
+        marker_id in frame_markers for marker_id in frame_layout.marker_ids
+    )
+    if not frame_is_complete and stick_markers is None:
+        require_markers(stick_detections, config.reference_ids, config.display_name)
+    height = estimate_height(frame_markers, stick_markers, subject, frame_layout)
     result = {
         "image": image_path.name,
         "image_size_px": {"width": image.shape[1], "height": image.shape[0]},
         "detector": {
-            "marker_type": config.marker_type,
-            "marker_family": config.dictionary_name,
-            "required_ids": list(config.reference_ids),
-            "subject_model": POSE_MODEL_NAME,
+            "frame_marker_family": frame_layout.dictionary,
+            "frame_marker_ids": list(frame_layout.marker_ids),
+            "stick_marker_family": config.dictionary_name,
+            "stick_marker_ids": list(config.reference_ids),
+            "body_detectors": {
+                name: detector_result.status.value
+                for name, detector_result in body_result.detector_results.items()
+            },
             "subject_confidence": round(subject.confidence, 4),
         },
-        "markers": [
+        "frame_markers": [
             {
                 "id": marker.id,
                 "center_px": _point_dict(marker.center),
                 "area_px": round(marker.area_px, 2),
                 "corners_px": [_point_dict(point) for point in marker.corners],
             }
-            for marker in markers
+            for marker in frame_markers.values()
         ],
-        "subject_box_px": {
-            "x1": round(subject.box[0], 3),
-            "y1": round(subject.box[1], 3),
-            "x2": round(subject.box[2], 3),
-            "y2": round(subject.box[3], 3),
-        },
+        "stick_markers": [
+            {
+                "id": marker.id,
+                "center_px": _point_dict(marker.center),
+                "area_px": round(marker.area_px, 2),
+                "corners_px": [_point_dict(point) for point in marker.corners],
+            }
+            for marker in stick_detections.values()
+        ],
         "estimate": height,
+        "body_detection_diagnostics": list(body_result.diagnostics),
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{image_path.stem}.json"
     output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     write_overlay(
         image,
-        markers,
+        frame_markers,
+        stick_markers,
         subject,
         height,
         config,
@@ -312,10 +438,10 @@ def parse_args() -> argparse.Namespace:
         help="image paths; defaults to the two JPEGs in this folder",
     )
     parser.add_argument(
-        "--model",
+        "--frame-layout",
         type=Path,
-        default=SCRIPT_DIR / POSE_MODEL_NAME,
-        help="path to a YOLO pose model weight",
+        default=FRAME_LAYOUT_PATH,
+        help="four-marker frame layout JSON used for primary rectification",
     )
     parser.add_argument(
         "--output-dir",
@@ -325,6 +451,11 @@ def parse_args() -> argparse.Namespace:
             "directory for JSON results and annotated images; defaults to "
             "experimental/results/<marker-type>"
         ),
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="continue processing later images if one image fails",
     )
     return parser.parse_args()
 
@@ -344,6 +475,7 @@ def main() -> int:
         if reference_ids[0] == reference_ids[1]:
             raise SystemExit("reference IDs must be different")
         config = replace(config, reference_ids=reference_ids)
+
     requested_images = args.images or [
         SCRIPT_DIR.parent / "inputs" / name for name in IMAGE_NAMES
     ]
@@ -351,28 +483,57 @@ def main() -> int:
     missing_images = [path.name for path in image_paths if not path.is_file()]
     if missing_images:
         raise SystemExit(f"missing required test image(s): {', '.join(missing_images)}")
-    if not args.model.is_file():
-        raise SystemExit(
-            f"missing pose model: {args.model}. "
-            "Place yolo11n-pose.pt in experimental or pass --model."
-        )
 
-    model = YOLO(str(args.model))
-    output_dir = args.output_dir or SCRIPT_DIR / "results" / args.marker_type
-    results = [process_image(model, path, output_dir, config) for path in image_paths]
+    try:
+        frame_layout = MarkerLayout.from_json(_resolve_path(args.frame_layout))
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"could not load frame layout: {error}") from error
+
+    body_detector = BodyDetectionOrchestrator(
+        configuration=BodyDetectionConfig(
+            pose_detector=ViTPoseDetectorAdapter(),
+            head_detector=VGGHeadsDetectorAdapter(),
+        ),
+        use_person_fallback=False,
+    )
+    output_dir = args.output_dir or SCRIPT_DIR / "results" / config.marker_type
+    results = []
+    failures = []
+    for path in image_paths:
+        try:
+            results.append(
+                process_image(body_detector, path, output_dir, config, frame_layout)
+            )
+        except (OSError, ValueError, RuntimeError) as error:
+            failures.append({"image": path.name, "error": str(error)})
+            if not args.continue_on_error:
+                raise
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    summary = {"results": results, "failures": failures}
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     for result in results:
         estimate = result["estimate"]
+        stick_check = estimate["stick_scale_check"]
+        stick_text = (
+            f"stick check {stick_check['height_cm']:.2f} cm"
+            if stick_check is not None
+            else "stick check unavailable"
+        )
         print(
             f"{result['image']}: "
-            f"{estimate['height_cm']:.2f} cm "
-            f"({estimate['subject_height_pixels']:.2f} px, "
-            f"{estimate['cm_per_pixel']:.6f} cm/px)"
+            f"{estimate['height_cm']:.2f} cm via {estimate['method']}; "
+            f"{stick_text}"
         )
-    print(f"Marker type: {config.marker_type} ({config.dictionary_name})")
+    print(
+        f"Stick markers: {config.marker_type} ({config.dictionary_name}), "
+        f"frame markers: {frame_layout.dictionary}"
+    )
+    if failures:
+        print(f"Failed images: {len(failures)}")
+        for failure in failures:
+            print(f"{failure['image']}: FAILED: {failure['error']}")
     print(f"Wrote results to {output_dir}")
-    return 0
+    return 2 if failures else 0
 
 
 if __name__ == "__main__":
