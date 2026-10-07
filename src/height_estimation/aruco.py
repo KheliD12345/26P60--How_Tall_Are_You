@@ -34,7 +34,7 @@ def detect_markers_in_image(
 
     detector = cv2.aruco.ArucoDetector(
         _get_dictionary(layout.dictionary),
-        cv2.aruco.DetectorParameters(),
+        _detector_parameters(),
     )
     corners, ids, _ = detector.detectMarkers(image)
     if ids is None:
@@ -59,6 +59,12 @@ def detect_markers_in_image(
         )
 
     return tuple(sorted(markers, key=lambda marker: marker.id))
+
+
+def _detector_parameters() -> cv2.aruco.DetectorParameters:
+    parameters = cv2.aruco.DetectorParameters()
+    parameters.adaptiveThreshWinSizeMax = 51
+    return parameters
 
 
 def validate_markers(

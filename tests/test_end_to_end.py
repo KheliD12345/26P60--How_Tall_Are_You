@@ -144,7 +144,7 @@ def test_module_command_pipeline_reports_unavailable_body_detection(tmp_path):
     assert not output_path.exists()
 
 
-def test_module_command_pipeline_writes_measurement_result(tmp_path):
+def test_module_command_pipeline_writes_geometric_height_result(tmp_path):
     image_path = PROJECT_ROOT / "test-khelan.jpg"
     layout_path = PROJECT_ROOT / "configs" / "marker_layout.json"
     output_path = tmp_path / "measurement.json"
@@ -162,19 +162,10 @@ def test_module_command_pipeline_writes_measurement_result(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert list(payload) == [
-        "diagnostics",
-        "estimated_height_cm",
-        "fusion_weights",
-        "measurements",
-        "method_estimates",
-        "quality",
-        "uncertainty_range",
-        "warnings",
-    ]
-    assert payload["estimated_height_cm"] > 0.0
-    assert payload["uncertainty_range"]["lower_cm"] < payload["uncertainty_range"]["upper_cm"]
-    assert payload["method_estimates"]
+    assert payload == {"geometric_height_cm": payload["geometric_height_cm"]}
+    assert payload["geometric_height_cm"] > 0.0
+    assert "head_bbox" not in json.dumps(payload)
+    assert "fusion" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize("image_name", ["test-khelan.jpg", "test-shriya.jpg"])

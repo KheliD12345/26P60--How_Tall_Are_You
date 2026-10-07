@@ -420,6 +420,28 @@ class HeightEstimate:
 
 
 @dataclass(frozen=True)
+class GeometricHeightResult:
+    geometric_height_cm: float
+
+    def __post_init__(self) -> None:
+        try:
+            height = float(self.geometric_height_cm)
+        except (TypeError, ValueError) as error:
+            raise ValueError("geometric height must be numeric") from error
+        if not isfinite(height) or height <= 0.0:
+            raise ValueError("geometric height must be finite and positive")
+        object.__setattr__(self, "geometric_height_cm", height)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "geometric_height_cm": _round_value(self.geometric_height_cm, 2),
+        }
+
+    def to_json(self, *, indent: int | None = None) -> str:
+        return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
+
+
+@dataclass(frozen=True)
 class MeasurementResult:
     estimated_height_cm: float
     uncertainty_range: tuple[float, float]
