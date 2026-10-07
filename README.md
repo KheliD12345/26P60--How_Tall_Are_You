@@ -62,19 +62,17 @@ Run the complete single-image pipeline explicitly with `--pipeline`:
 python -m height_estimation --pipeline person.jpg `
 	--layout configs/marker_layout.json `
 	--quality-policy fail `
-	--confidence-level 0.95 `
-	--output outputs/person-measurement.json `
+	--output outputs/person-height.json `
 	--overlay outputs/person-overlay.png
 ```
 
-The final JSON uses the `MeasurementResult` contract and includes the fused
-height estimate, uncertainty interval, quality assessment, method estimates,
-fusion weights, diagnostics, and warnings. The process exits with status `2`
-when a typed pipeline failure occurs. Use `--quality-policy continue` to retain
-a result when the quality gate reports warnings.
+The final JSON reports `geometric_height_cm` and acquisition quality. The
+pipeline does not generate head-bounding-box estimates or fuse measurements.
+The process exits with status `2` when a typed pipeline failure occurs. Use
+`--quality-policy continue` to retain a result when the quality gate reports
+warnings.
 
-The default pipeline fuses geometric and head-bounding-box estimates only.
-Anthropometric estimates are not included in pipeline results.
+Only the direct geometric estimate is included in pipeline results.
 
 Use `--no-person-fallback` to require configured model-backed body detectors.
 This is useful for verifying detector availability without silently using the

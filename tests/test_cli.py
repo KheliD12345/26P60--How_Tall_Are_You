@@ -4,9 +4,9 @@ import pytest
 
 from height_estimation.cli import main
 from height_estimation.advanced_models import (
+    GeometricHeightResult,
     HeightEstimate,
     MeasurementMethod,
-    MeasurementResult,
     QualityAssessment,
     QualityMetrics,
 )
@@ -228,15 +228,7 @@ def test_cli_rejects_person_detection_failure(tmp_path, monkeypatch, capsys):
 
 
 def make_pipeline_result(calibration):
-    quality = QualityAssessment(passed=True, metrics=QualityMetrics())
-    estimate = HeightEstimate(MeasurementMethod.GEOMETRIC, 170.0, 0.9)
-    measurement = MeasurementResult(
-        estimated_height_cm=170.0,
-        uncertainty_range=(165.0, 175.0),
-        quality=quality,
-        method_estimates=(estimate,),
-        fusion_weights={"geometric": 1.0},
-    )
+    measurement = GeometricHeightResult(geometric_height_cm=170.0)
     return PipelineRunResult(
         measurement_result=measurement,
         stages={
@@ -283,8 +275,6 @@ def test_cli_full_pipeline_writes_measurement_json(tmp_path, monkeypatch, capsys
             str(output_path),
             "--quality-policy",
             "continue",
-            "--confidence-level",
-            "0.9",
             "--no-person-fallback",
         ]
     ) == 0
@@ -293,9 +283,8 @@ def test_cli_full_pipeline_writes_measurement_json(tmp_path, monkeypatch, capsys
         make_pipeline_result(calibration).measurement_result.to_dict()
     )
     assert calls[0].quality_policy == "continue"
-    assert calls[0].confidence_level == 0.9
     assert calls[0].use_person_fallback is False
-    assert "Wrote measurement result" in capsys.readouterr().out
+    assert "Wrote geometric height result" in capsys.readouterr().out
 
 
 def test_cli_model_detectors_selects_lazy_adapters(tmp_path, monkeypatch):
