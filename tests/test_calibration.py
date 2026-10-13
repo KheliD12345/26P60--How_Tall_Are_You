@@ -57,6 +57,62 @@ def test_calibrates_image_in_one_result(tmp_path):
     assert result.person is None
 
 
+def test_calibration_ignores_detected_markers_outside_layout(
+    tmp_path,
+    monkeypatch,
+):
+    image_path = tmp_path / "markers.png"
+    make_image(image_path)
+    markers = tuple(
+        DetectedMarker(
+            id=marker_id,
+            corners=(
+                (center[0] - 5.0, center[1] - 5.0),
+                (center[0] + 5.0, center[1] - 5.0),
+                (center[0] + 5.0, center[1] + 5.0),
+                (center[0] - 5.0, center[1] + 5.0),
+            ),
+            center_x=center[0],
+            center_y=center[1],
+            area_px=100.0,
+        )
+        for marker_id, center in (
+            (0, (50.0, 350.0)),
+            (1, (550.0, 350.0)),
+            (2, (50.0, 50.0)),
+            (3, (550.0, 50.0)),
+            (4, (300.0, 200.0)),
+            (5, (400.0, 200.0)),
+        )
+    )
+    monkeypatch.setattr(
+        "height_estimation.calibration.detect_markers",
+        lambda image, layout: markers,
+    )
+
+    result = calibrate_image(image_path, make_layout())
+
+    assert [marker.id for marker in result.markers] == [0, 1, 2, 3]
+    assert len(result.geometry) == 6
+
+
+def test_calibration_can_disable_person_fallback(tmp_path, monkeypatch):
+    image_path = tmp_path / "markers.png"
+    make_image(image_path)
+    monkeypatch.setattr(
+        "height_estimation.calibration.detect_person_endpoints",
+        lambda image: pytest.fail("person fallback should be disabled"),
+    )
+
+    result = calibrate_image(
+        image_path,
+        make_layout(),
+        use_person_fallback=False,
+    )
+
+    assert result.person is None
+
+
 def test_calibrates_person_height(tmp_path, monkeypatch):
     image_path = tmp_path / "markers.png"
     make_image(image_path)

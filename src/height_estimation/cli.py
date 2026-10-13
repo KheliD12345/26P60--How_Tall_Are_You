@@ -23,7 +23,7 @@ DEFAULT_LAYOUT = Path(__file__).resolve().parents[2] / "configs" / "marker_layou
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prepare a known ArUco marker layout for height estimation."
+        description="Prepare a known fiducial marker layout for height estimation."
     )
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument(
@@ -50,12 +50,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("fail", "continue"),
         default="fail",
         help="stop on quality failure or continue with a warning",
-    )
-    parser.add_argument(
-        "--confidence-level",
-        type=float,
-        default=0.95,
-        help="confidence level for the fused uncertainty interval",
     )
     parser.add_argument(
         "--batch",
@@ -162,7 +156,6 @@ def _run_pipeline_mode(args: argparse.Namespace, layout: MarkerLayout) -> int:
                 output_path = output_dir / f"{image.stem}.json"
             config = PipelineConfig(
                 quality_policy=args.quality_policy,
-                confidence_level=args.confidence_level,
                 use_person_fallback=not args.no_person_fallback,
                 output_path=output_path,
                 body_detection=(
@@ -195,7 +188,7 @@ def _run_pipeline_mode(args: argparse.Namespace, layout: MarkerLayout) -> int:
             if output_path is None:
                 print(result.measurement_result.to_json(indent=2))
             else:
-                print(f"Wrote measurement result to {output_path}")
+                print(f"Wrote geometric height result to {output_path}")
             if args.overlay is not None:
                 print(f"Wrote calibration overlay to {args.overlay}")
         except (OSError, ValueError, PipelineFailure) as error:

@@ -114,18 +114,23 @@ def test_configurable_base_weights_are_applied_only_to_present_methods():
         [
             estimate(MeasurementMethod.GEOMETRIC, 170.0, 1.0),
             estimate(MeasurementMethod.HEAD_BBOX, 180.0, 1.0),
-            estimate(MeasurementMethod.ANTHROPOMETRIC, 175.0, 1.0),
         ]
     )
 
-    assert set(result.fusion_weights) == {"geometric", "head_bbox", "anthropometric"}
+    assert set(result.fusion_weights) == {"geometric", "head_bbox"}
     assert result.fusion_weights["head_bbox"] > result.fusion_weights["geometric"]
-    assert result.fusion_weights["anthropometric"] > 0.0
     assert any(diagnostic.startswith("Raw weights:") for diagnostic in result.diagnostics)
     assert any(
         diagnostic.startswith("Normalized weights:")
         for diagnostic in result.diagnostics
     )
+
+
+def test_anthropometric_estimates_are_rejected_by_default_fusion():
+    with pytest.raises(ValueError, match="unsupported fusion method"):
+        MeasurementFusionEngine().fuse(
+            [estimate(MeasurementMethod.ANTHROPOMETRIC, 175.0, 1.0)]
+        )
 
 
 @pytest.mark.parametrize(
@@ -314,7 +319,7 @@ def test_fusion_result_is_json_safe_and_preserves_methods():
     result = MeasurementFusionEngine().fuse(
         [
             estimate(MeasurementMethod.GEOMETRIC, 171.0, 0.9),
-            estimate(MeasurementMethod.ANTHROPOMETRIC, 172.0, 0.8),
+            estimate(MeasurementMethod.HEAD_BBOX, 172.0, 0.8),
         ],
         quality=make_quality(),
     )
@@ -324,7 +329,7 @@ def test_fusion_result_is_json_safe_and_preserves_methods():
     assert json.loads(result.to_json()) == payload
     assert [item["method"] for item in payload["method_estimates"]] == [
         "geometric",
-        "anthropometric",
+        "head_bbox",
     ]
     assert payload["diagnostics"]
     assert payload["measurements"]

@@ -42,6 +42,24 @@ def test_loads_backdrop_layout():
     ]
 
 
+def test_loads_apriltag_hybrid_layout():
+    layout = MarkerLayout.from_json(
+        Path(__file__).parents[1] / "configs" / "apriltag_hybrid_layout.json"
+    )
+
+    assert layout.dictionary == "DICT_APRILTAG_36h11"
+    assert layout.marker_size_cm == 18.0
+    assert [
+        (marker.id, marker.x_cm, marker.y_cm)
+        for marker in layout.markers
+    ] == [
+        (0, 0.0, 194.0),
+        (1, 103.5, 194.0),
+        (2, 0.0, 0.0),
+        (3, 103.5, 0.0),
+    ]
+
+
 def test_rejects_duplicate_marker_ids():
     data = {
         "dictionary": "DICT_4X4_50",

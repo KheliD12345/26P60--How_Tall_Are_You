@@ -9,9 +9,9 @@ import json
 
 from height_estimation.advanced_models import (
     BodyDetections,
+    GeometricHeightResult,
     HeightEstimate,
     MeasurementMethod,
-    MeasurementResult,
     QualityAssessment,
     QualityMetrics,
 )
@@ -33,13 +33,11 @@ from height_estimation.models import (
     MarkerPosition,
     PersonEndpoints,
 )
-from height_estimation.fusion import build_measurement_result
 from height_estimation.pipeline import (
     PIPELINE_STAGE_ORDER,
     BodyDetectionStage,
     CalibrationStage,
     EstimationStage,
-    FusionStage,
     PipelineConfig,
     PipelineDependencies,
     PipelineFailure,
@@ -88,18 +86,12 @@ class FakeEstimation:
         raise NotImplementedError
 
 
-class FakeFusion:
-    def run(self, estimates, *, quality):
-        raise NotImplementedError
-
-
 def make_dependencies() -> PipelineDependencies:
     return PipelineDependencies(
         calibration=FakeCalibration(),
         quality=FakeQuality(),
         body_detection=FakeBodyDetection(),
         estimation=FakeEstimation(),
-        fusion=FakeFusion(),
     )
 
 
@@ -107,15 +99,8 @@ def make_quality() -> QualityAssessment:
     return QualityAssessment(passed=True, metrics=QualityMetrics())
 
 
-def make_measurement_result() -> MeasurementResult:
-    estimate = HeightEstimate(MeasurementMethod.GEOMETRIC, 170.0, 0.9)
-    return MeasurementResult(
-        estimated_height_cm=170.0,
-        uncertainty_range=(165.0, 175.0),
-        quality=make_quality(),
-        method_estimates=(estimate,),
-        fusion_weights={"geometric": 1.0},
-    )
+def make_geometric_result() -> GeometricHeightResult:
+    return GeometricHeightResult(geometric_height_cm=170.0)
 
 
 def test_pipeline_input_normalises_paths_and_preserves_calibration_option():
@@ -134,8 +119,6 @@ def test_pipeline_input_normalises_paths_and_preserves_calibration_option():
     "kwargs, message",
     [
         ({"quality_policy": "reject"}, "quality policy"),
-        ({"confidence_level": 0.0}, "confidence level"),
-        ({"confidence_level": 1.0}, "confidence level"),
         ({"use_person_fallback": "yes"}, "use_person_fallback"),
     ],
 )
@@ -168,29 +151,6 @@ def test_default_pipeline_dependencies_propagate_body_detection_configuration():
     assert result.status is DetectionStatus.PARTIAL
     assert result.detections.keypoints["left_hip"].x == 0.4
     assert result.detector_results["head"].status is DetectionStatus.UNAVAILABLE
-
-
-def test_default_pipeline_dependencies_propagate_confidence_level_to_fusion():
-    estimates = (
-        HeightEstimate(MeasurementMethod.GEOMETRIC, 165.0, 0.9),
-        HeightEstimate(MeasurementMethod.HEAD_BBOX, 175.0, 0.9),
-    )
-    ninety_percent = default_pipeline_dependencies(
-        PipelineConfig(confidence_level=0.90)
-    ).fusion.run(estimates, quality=make_quality())
-    ninety_nine_percent = default_pipeline_dependencies(
-        PipelineConfig(confidence_level=0.99)
-    ).fusion.run(estimates, quality=make_quality())
-
-    ninety_width = (
-        ninety_percent.uncertainty_range[1]
-        - ninety_percent.uncertainty_range[0]
-    )
-    ninety_nine_width = (
-        ninety_nine_percent.uncertainty_range[1]
-        - ninety_nine_percent.uncertainty_range[0]
-    )
-    assert ninety_nine_width > ninety_width
 
 
 def test_default_pipeline_dependencies_keep_optional_adapters_unloaded():
@@ -273,7 +233,6 @@ def test_pipeline_stage_order_captures_quality_reassessment_before_estimation():
         PipelineStage.BODY_DETECTION,
         PipelineStage.QUALITY_REASSESSMENT,
         PipelineStage.ESTIMATION,
-        PipelineStage.FUSION,
         PipelineStage.PERSISTENCE,
     )
     assert PIPELINE_STAGE_ORDER.index(PipelineStage.QUALITY_REASSESSMENT) < PIPELINE_STAGE_ORDER.index(
@@ -288,7 +247,6 @@ def test_pipeline_dependencies_keep_each_stage_injectable():
     assert isinstance(dependencies.quality, FakeQuality)
     assert isinstance(dependencies.body_detection, FakeBodyDetection)
     assert isinstance(dependencies.estimation, FakeEstimation)
-    assert isinstance(dependencies.fusion, FakeFusion)
 
 
 def test_stage_result_preserves_partial_values_and_diagnostics():
@@ -315,19 +273,19 @@ def test_failed_stage_requires_actionable_diagnostic():
 
 
 def test_pipeline_run_result_accepts_final_measurement_and_stage_records():
-    fusion_result = PipelineStageResult(
-        stage=PipelineStage.FUSION,
+    estimation_result = PipelineStageResult(
+        stage=PipelineStage.ESTIMATION,
         status=PipelineStatus.SUCCESS,
-        value=make_measurement_result(),
+        value=make_geometric_result(),
     )
     run_result = PipelineRunResult(
-        measurement_result=fusion_result.value,
-        stages={PipelineStage.FUSION: fusion_result},
+        measurement_result=estimation_result.value,
+        stages={PipelineStage.ESTIMATION: estimation_result},
         diagnostics=("Measurement completed.",),
     )
 
-    assert run_result.measurement_result.estimated_height_cm == 170.0
-    assert run_result.stages[PipelineStage.FUSION].available is True
+    assert run_result.measurement_result.geometric_height_cm == 170.0
+    assert run_result.stages[PipelineStage.ESTIMATION].available is True
 
 
 def test_pipeline_run_result_rejects_invalid_stage_values():
@@ -360,7 +318,6 @@ def test_stage_protocol_contracts_are_callable_with_typed_values():
     assert isinstance(dependencies.quality, QualityStage)
     assert isinstance(dependencies.body_detection, BodyDetectionStage)
     assert isinstance(dependencies.estimation, EstimationStage)
-    assert isinstance(dependencies.fusion, FusionStage)
     assert image.shape == (10, 10)
     assert calibration is not None
     assert body is not None
@@ -485,19 +442,7 @@ class RecordingEstimation:
         return self.estimates
 
 
-class RecordingFusion:
-    def __init__(self, events, error=None):
-        self.events = events
-        self.error = error
-
-    def run(self, estimates, *, quality):
-        self.events.append("fusion")
-        if self.error is not None:
-            raise self.error
-        return build_measurement_result(estimates, quality=quality)
-
-
-def make_pipeline(tmp_path, *, quality=None, body=None, estimation=None, fusion=None):
+def make_pipeline(tmp_path, *, quality=None, body=None, estimation=None):
     events = []
     image_path = tmp_path / "person.png"
     assert cv2.imwrite(str(image_path), np.full((100, 100), 255, dtype=np.uint8))
@@ -506,7 +451,6 @@ def make_pipeline(tmp_path, *, quality=None, body=None, estimation=None, fusion=
         quality=RecordingQuality(events, final_quality=quality),
         body_detection=RecordingBodyDetection(events, result=body),
         estimation=RecordingEstimation(events, estimates=estimation),
-        fusion=RecordingFusion(events, error=fusion),
     )
     return (
         MeasurementPipeline(
@@ -523,14 +467,13 @@ def test_measurement_pipeline_runs_stages_in_order_and_returns_measurement(tmp_p
 
     result = pipeline.run(pipeline_input)
 
-    assert result.measurement_result.estimated_height_cm == 80.0
+    assert result.measurement_result.geometric_height_cm == 80.0
     assert events == [
         "calibration",
         "quality_assessment",
         "body_detection",
         "quality_reassessment",
         "estimation",
-        "fusion",
     ]
     assert set(result.stages) == {
         PipelineStage.INPUT,
@@ -539,7 +482,6 @@ def test_measurement_pipeline_runs_stages_in_order_and_returns_measurement(tmp_p
         PipelineStage.BODY_DETECTION,
         PipelineStage.QUALITY_REASSESSMENT,
         PipelineStage.ESTIMATION,
-        PipelineStage.FUSION,
     }
 
 
@@ -580,17 +522,12 @@ def test_pipeline_reuses_calibration_working_image_without_redistorting(tmp_path
             del detections, calibration, quality, image_size
             return (HeightEstimate(MeasurementMethod.GEOMETRIC, 170.0, 0.9),)
 
-    class Fusion:
-        def run(self, estimates, *, quality):
-            return build_measurement_result(estimates, quality=quality)
-
     pipeline = MeasurementPipeline(
         dependencies=PipelineDependencies(
             calibration=Calibration(),
             quality=Quality(),
             body_detection=Body(),
             estimation=Estimation(),
-            fusion=Fusion(),
         )
     )
     pipeline.run(
@@ -602,13 +539,14 @@ def test_pipeline_reuses_calibration_working_image_without_redistorting(tmp_path
 
 
 def test_pipeline_run_result_serializes_stage_summary_as_json():
+    geometric_result = make_geometric_result()
     result = PipelineRunResult(
-        measurement_result=make_measurement_result(),
+        measurement_result=geometric_result,
         stages={
-            PipelineStage.FUSION: PipelineStageResult(
-                stage=PipelineStage.FUSION,
+            PipelineStage.ESTIMATION: PipelineStageResult(
+                stage=PipelineStage.ESTIMATION,
                 status=PipelineStatus.SUCCESS,
-                value=make_measurement_result(),
+                value=geometric_result,
             )
         },
         diagnostics=("completed",),
@@ -616,8 +554,9 @@ def test_pipeline_run_result_serializes_stage_summary_as_json():
 
     payload = json.loads(result.to_json(indent=2))
 
-    assert payload["measurement_result"]["estimated_height_cm"] == 170.0
-    assert payload["stages"]["fusion"]["status"] == "success"
+    assert payload["measurement_result"]["geometric_height_cm"] == 170.0
+    assert "fusion_weights" not in payload["measurement_result"]
+    assert payload["stages"]["estimation"]["status"] == "success"
     assert payload["diagnostics"] == ["completed"]
 
 
@@ -699,7 +638,6 @@ def test_measurement_pipeline_reports_calibration_failure(tmp_path):
         quality=RecordingQuality([]),
         body_detection=RecordingBodyDetection([]),
         estimation=RecordingEstimation([]),
-        fusion=RecordingFusion([]),
     )
 
     class FailingCalibration:
@@ -711,7 +649,6 @@ def test_measurement_pipeline_reports_calibration_failure(tmp_path):
         quality=pipeline.dependencies.quality,
         body_detection=pipeline.dependencies.body_detection,
         estimation=pipeline.dependencies.estimation,
-        fusion=pipeline.dependencies.fusion,
     )
 
     with pytest.raises(PipelineFailure) as error:
@@ -734,17 +671,22 @@ def test_measurement_pipeline_reports_estimator_failure(tmp_path):
     assert error.value.stage is PipelineStage.ESTIMATION
 
 
-def test_measurement_pipeline_reports_fusion_failure(tmp_path):
+def test_measurement_pipeline_discards_non_geometric_estimates(tmp_path):
     pipeline, pipeline_input, _ = make_pipeline(
         tmp_path,
-        fusion=ValueError("fusion contract failed"),
+        estimation=(
+            HeightEstimate(MeasurementMethod.GEOMETRIC, 170.0, 0.9),
+            HeightEstimate(MeasurementMethod.HEAD_BBOX, 150.0, 0.9),
+        ),
     )
 
-    with pytest.raises(PipelineFailure) as error:
-        pipeline.run(pipeline_input)
+    result = pipeline.run(pipeline_input)
 
-    assert error.value.code is PipelineFailureCode.FUSION_FAILED
-    assert error.value.stage is PipelineStage.FUSION
+    payload = result.measurement_result.to_dict()
+    assert payload == {"geometric_height_cm": 170.0}
+    assert "head_bbox" not in json.dumps(payload)
+    assert "fusion" not in json.dumps(payload)
+    assert PipelineStage.FUSION not in result.stages
 
 
 def test_default_pipeline_dependencies_merge_optional_adapter_outputs():

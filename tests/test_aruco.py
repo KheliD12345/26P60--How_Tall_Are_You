@@ -49,6 +49,28 @@ def test_detects_marker_corners_and_centres(tmp_path):
     assert markers[0].area_px > 9000
 
 
+def test_recovers_visible_frame_markers_in_p018_hybrid_photo():
+    image_path = Path(__file__).resolve().parents[1] / "inputs" / "P018_2.jpg"
+    if not image_path.is_file():
+        pytest.skip("project hybrid image fixture is unavailable")
+    layout = MarkerLayout.from_dict(
+        {
+            "dictionary": "DICT_4X4_50",
+            "marker_size_cm": 18,
+            "markers": [
+                {"id": 0, "name": "top_left", "x_cm": 0, "y_cm": 200},
+                {"id": 1, "name": "top_right", "x_cm": 100, "y_cm": 200},
+                {"id": 2, "name": "bottom_left", "x_cm": 0, "y_cm": 0},
+                {"id": 3, "name": "bottom_right", "x_cm": 100, "y_cm": 0},
+            ],
+        }
+    )
+
+    markers = detect_markers(image_path, layout)
+
+    assert {marker.id for marker in markers} >= {0, 1, 2, 3}
+
+
 def test_returns_no_markers_for_plain_image(tmp_path):
     image_path = tmp_path / "plain.png"
     assert cv2.imwrite(str(image_path), np.full((200, 200), 255, dtype=np.uint8))
