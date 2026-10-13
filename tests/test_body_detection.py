@@ -718,6 +718,25 @@ def test_vitpose_adapter_keeps_empty_output_as_no_person():
     assert result.detections.keypoints == {}
 
 
+def test_vitpose_adapter_clamps_tiny_visibility_rounding_overflow():
+    adapter = ViTPoseDetectorAdapter(
+        lambda: lambda image: {
+            "heel_landmarks": {
+                "left": {
+                    "x": 0.5,
+                    "y": 0.95,
+                    "visibility": 1.0005,
+                },
+            },
+        }
+    )
+
+    result = adapter.detect(np.zeros((20, 20, 3), dtype=np.uint8))
+
+    assert result.status == DetectionStatus.SUCCESS
+    assert result.detections.keypoints["left_heel"].visibility == 1.0
+
+
 def test_vitpose_adapter_rejects_malformed_grouped_landmarks():
     adapter = ViTPoseDetectorAdapter(
         lambda: lambda image: {

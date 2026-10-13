@@ -252,8 +252,6 @@ def test_independent_integration_returns_available_methods_without_fusion():
 
     assert [estimate.method for estimate in estimates] == [
         MeasurementMethod.GEOMETRIC,
-        MeasurementMethod.HEAD_BBOX,
-        MeasurementMethod.ANTHROPOMETRIC,
     ]
     assert all(estimate.method is not MeasurementMethod.FUSION for estimate in estimates)
     assert all(estimate.method is not MeasurementMethod.SMPL_BASED for estimate in estimates)

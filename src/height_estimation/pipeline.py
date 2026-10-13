@@ -20,7 +20,9 @@ import cv2
 
 from .advanced_models import (
     BodyDetections,
+    GeometricHeightResult,
     HeightEstimate,
+    MeasurementMethod,
     MeasurementResult,
     QualityAssessment,
 )
@@ -32,7 +34,6 @@ from .body_detection import (
 )
 from .calibration import calibrate_image
 from .estimators import estimate_independent_heights
-from .fusion import build_measurement_result
 from .geometry import transform_person_endpoints, transform_point
 from .models import CalibrationResult, CameraCalibration, MarkerLayout
 from .quality import AcquisitionQualityGate
@@ -56,7 +57,6 @@ PIPELINE_STAGE_ORDER = (
     PipelineStage.BODY_DETECTION,
     PipelineStage.QUALITY_REASSESSMENT,
     PipelineStage.ESTIMATION,
-    PipelineStage.FUSION,
     PipelineStage.PERSISTENCE,
 )
 
@@ -103,7 +103,6 @@ class PipelineInput:
 @dataclass(frozen=True)
 class PipelineConfig:
     quality_policy: Literal["fail", "continue"] = "fail"
-    confidence_level: float = 0.95
     use_person_fallback: bool = True
     output_path: Path | None = None
     intermediate_output_dir: Path | None = None
@@ -113,8 +112,6 @@ class PipelineConfig:
     def __post_init__(self) -> None:
         if self.quality_policy not in {"fail", "continue"}:
             raise ValueError("quality policy must be fail or continue")
-        if not isfinite(self.confidence_level) or not 0.0 < self.confidence_level < 1.0:
-            raise ValueError("confidence level must be between zero and one")
         if not isinstance(self.use_person_fallback, bool):
             raise ValueError("use_person_fallback must be a boolean")
         if self.body_detection is not None and not isinstance(
@@ -190,7 +187,7 @@ class PipelineStageResult(Generic[StageValue]):
 
 @dataclass(frozen=True)
 class PipelineRunResult:
-    measurement_result: MeasurementResult | None
+    measurement_result: GeometricHeightResult | MeasurementResult | None
     stages: Mapping[PipelineStage, PipelineStageResult[object]] = field(
         default_factory=dict
     )
@@ -213,9 +210,11 @@ class PipelineRunResult:
             raise ValueError("pipeline warnings must be non-empty strings")
         if self.measurement_result is not None and not isinstance(
             self.measurement_result,
-            MeasurementResult,
+            (GeometricHeightResult, MeasurementResult),
         ):
-            raise TypeError("measurement_result must be a MeasurementResult")
+            raise TypeError(
+                "measurement_result must be a geometric or fused result"
+            )
         object.__setattr__(self, "stages", stages)
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
         object.__setattr__(self, "warnings", tuple(self.warnings))
@@ -276,32 +275,24 @@ class EstimationStage(Protocol):
         ...
 
 
-@runtime_checkable
-class FusionStage(Protocol):
-    def run(
-        self,
-        estimates: Sequence[HeightEstimate],
-        *,
-        quality: QualityAssessment,
-    ) -> MeasurementResult:
-        ...
-
-
 @dataclass(frozen=True)
 class PipelineDependencies:
     calibration: CalibrationStage
     quality: QualityStage
     body_detection: BodyDetectionStage
     estimation: EstimationStage
-    fusion: FusionStage
 
 
 class _CalibrationStage:
+    def __init__(self, *, use_person_fallback: bool) -> None:
+        self.use_person_fallback = use_person_fallback
+
     def run(self, pipeline_input: PipelineInput) -> CalibrationResult:
         return calibrate_image(
             pipeline_input.image_path,
             pipeline_input.layout,
             camera_calibration_path=pipeline_input.camera_calibration_path,
+            use_person_fallback=self.use_person_fallback,
         )
 
 
@@ -412,43 +403,25 @@ class _EstimationStage:
         )
 
 
-class _FusionStage:
-    def __init__(self, *, confidence_level: float) -> None:
-        self.confidence_level = confidence_level
-
-    def run(
-        self,
-        estimates: Sequence[HeightEstimate],
-        *,
-        quality: QualityAssessment,
-    ) -> MeasurementResult:
-        return build_measurement_result(
-            estimates,
-            quality=quality,
-            confidence_level=self.confidence_level,
-        )
-
-
 def default_pipeline_dependencies(
     config: PipelineConfig | None = None,
 ) -> PipelineDependencies:
     pipeline_config = config or PipelineConfig()
     return PipelineDependencies(
-        calibration=_CalibrationStage(),
+        calibration=_CalibrationStage(
+            use_person_fallback=pipeline_config.use_person_fallback,
+        ),
         quality=_QualityStage(),
         body_detection=_BodyDetectionStage(
             use_person_fallback=pipeline_config.use_person_fallback,
             configuration=pipeline_config.body_detection,
         ),
         estimation=_EstimationStage(),
-        fusion=_FusionStage(
-            confidence_level=pipeline_config.confidence_level,
-        ),
     )
 
 
 class MeasurementPipeline:
-    """Coordinate image calibration, body evidence, estimation, and fusion."""
+    """Coordinate calibration, body evidence, and geometric height estimation."""
 
     def __init__(
         self,
@@ -533,7 +506,15 @@ class MeasurementPipeline:
                 stages,
             )
 
-        measurement = self._run_fusion(estimates, quality, stages)
+        measurement = GeometricHeightResult(
+            geometric_height_cm=estimates[0].height_cm,
+        )
+        stages[PipelineStage.ESTIMATION] = PipelineStageResult(
+            stage=PipelineStage.ESTIMATION,
+            status=PipelineStatus.SUCCESS,
+            value=measurement,
+            diagnostics=("Reported the direct geometric height estimate.",),
+        )
         diagnostics = self._collect_messages(stages, "diagnostics")
         warnings = self._collect_messages(stages, "warnings")
         self._persist(
@@ -698,6 +679,11 @@ class MeasurementPipeline:
                 PipelineStage.ESTIMATION,
                 stages,
             )
+        estimates = tuple(
+            estimate
+            for estimate in estimates
+            if estimate.method is MeasurementMethod.GEOMETRIC
+        )
         stages[PipelineStage.ESTIMATION] = PipelineStageResult(
             stage=PipelineStage.ESTIMATION,
             status=(
@@ -707,41 +693,14 @@ class MeasurementPipeline:
             ),
             value=estimates,
             diagnostics=(
-                f"Produced {len(estimates)} independent height estimate(s).",
+                f"Produced {len(estimates)} geometric height estimate(s).",
             ),
         )
         return estimates
 
-    def _run_fusion(
-        self,
-        estimates: Sequence[HeightEstimate],
-        quality: QualityAssessment,
-        stages: dict[PipelineStage, PipelineStageResult[object]],
-    ) -> MeasurementResult:
-        try:
-            measurement = self.dependencies.fusion.run(
-                estimates,
-                quality=quality,
-            )
-        except Exception as error:
-            return self._fail(
-                PipelineFailureCode.FUSION_FAILED,
-                f"measurement fusion failed: {error}",
-                PipelineStage.FUSION,
-                stages,
-            )
-        stages[PipelineStage.FUSION] = PipelineStageResult(
-            stage=PipelineStage.FUSION,
-            status=PipelineStatus.SUCCESS,
-            value=measurement,
-            diagnostics=measurement.diagnostics,
-            warnings=measurement.warnings,
-        )
-        return measurement
-
     def _persist(
         self,
-        measurement: MeasurementResult,
+        measurement: GeometricHeightResult,
         *,
         stages: dict[PipelineStage, PipelineStageResult[object]],
         diagnostics: tuple[str, ...],
