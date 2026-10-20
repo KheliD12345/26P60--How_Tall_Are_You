@@ -288,6 +288,7 @@ def estimate_height(
             "for fallback"
         )
 
+    # Frame homography takes priority; stick distance is the fallback.
     height_cm = frame_height if frame_height is not None else stick_check["height_cm"]
     if not isfinite(height_cm) or height_cm <= 0:
         raise ValueError("height estimate must be finite and greater than zero")
