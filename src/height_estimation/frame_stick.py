@@ -1,0 +1,134 @@
+"""Height estimation from frame homography and stick marker scale."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from math import atan2, degrees, hypot, isfinite
+
+from .geometry import estimate_homography, transform_point
+from .models import DetectedMarker, MarkerLayout
+
+
+@dataclass(frozen=True)
+class MarkerDetection:
+    id: int
+    corners: tuple[tuple[float, float], ...]
+    center: tuple[float, float]
+    area_px: float
+
+
+@dataclass(frozen=True)
+class SubjectEndpoints:
+    head_top: tuple[float, float]
+    heel_points: tuple[tuple[float, float], ...]
+    confidence: float
+
+
+def point_to_dict(point: tuple[float, float]) -> dict[str, float]:
+    return {"x_px": round(point[0], 3), "y_px": round(point[1], 3)}
+
+
+def _detected_marker(marker: MarkerDetection) -> DetectedMarker:
+    return DetectedMarker(
+        id=marker.id,
+        corners=marker.corners,
+        center_x=marker.center[0],
+        center_y=marker.center[1],
+        area_px=marker.area_px,
+    )
+
+
+def estimate_height(
+    frame_markers: dict[int, MarkerDetection],
+    stick_markers: tuple[MarkerDetection, MarkerDetection] | None,
+    subject: SubjectEndpoints,
+    frame_layout: MarkerLayout,
+) -> dict[str, object]:
+    frame_height: float | None = None
+    frame_details: dict[str, object] | None = None
+    selected_heel = max(subject.heel_points, key=lambda point: point[1])
+    if all(marker_id in frame_markers for marker_id in frame_layout.marker_ids):
+        detected = tuple(
+            _detected_marker(frame_markers[marker_id])
+            for marker_id in frame_layout.marker_ids
+        )
+        homography = estimate_homography(detected, frame_layout)
+        head_metric = transform_point(subject.head_top, homography.matrix)
+        transformed_heels = tuple(
+            transform_point(point, homography.matrix)
+            for point in subject.heel_points
+        )
+        heel_index = max(
+            range(len(transformed_heels)),
+            key=lambda index: transformed_heels[index][1],
+        )
+        selected_heel = subject.heel_points[heel_index]
+        frame_height = abs(transformed_heels[heel_index][1] - head_metric[1])
+        frame_details = {
+            "height_cm": round(frame_height, 2),
+            "reprojection_error_cm": round(homography.reprojection_error_cm, 4),
+            "head_top_cm": {
+                "x": round(head_metric[0], 3),
+                "y": round(head_metric[1], 3),
+            },
+            "feet_bottom_cm": {
+                "x": round(transformed_heels[heel_index][0], 3),
+                "y": round(transformed_heels[heel_index][1], 3),
+            },
+        }
+
+    height_pixels = abs(selected_heel[1] - subject.head_top[1])
+    stick_check: dict[str, object] | None = None
+    if stick_markers is not None:
+        first_center, second_center = stick_markers[0].center, stick_markers[1].center
+        reference_dx = second_center[0] - first_center[0]
+        reference_dy = second_center[1] - first_center[1]
+        reference_pixels = hypot(reference_dx, reference_dy)
+        if reference_pixels <= 0.0:
+            raise ValueError("reference marker centres must be separated in the image")
+
+        reference_distance_cm = frame_layout.stick_reference_distance_cm
+        cm_per_pixel = reference_distance_cm / reference_pixels
+        stick_height_cm = height_pixels * cm_per_pixel
+        stick_check = {
+            "reference_distance_cm": reference_distance_cm,
+            "reference_distance_px": round(reference_pixels, 3),
+            "reference_delta_px": {
+                "x": round(reference_dx, 3),
+                "y": round(reference_dy, 3),
+            },
+            "reference_axis_angle_degrees": round(
+                degrees(atan2(reference_dy, reference_dx)),
+                3,
+            ),
+            "cm_per_pixel": round(cm_per_pixel, 6),
+            "height_cm": round(stick_height_cm, 2),
+            "difference_from_frame_homography_cm": (
+                round(stick_height_cm - frame_height, 2)
+                if frame_height is not None
+                else None
+            ),
+        }
+    elif frame_height is None:
+        raise ValueError(
+            "frame homography is unavailable and both stick markers are required "
+            "for fallback"
+        )
+
+    height_cm = frame_height if frame_height is not None else stick_check["height_cm"]
+    if not isfinite(height_cm) or height_cm <= 0:
+        raise ValueError("height estimate must be finite and greater than zero")
+    return {
+        "method": (
+            "four_frame_marker_homography"
+            if frame_height is not None
+            else "stick_marker_scalar_fallback"
+        ),
+        "height_cm": round(height_cm, 2),
+        "subject_height_pixels": round(height_pixels, 3),
+        "head_top": point_to_dict(subject.head_top),
+        "feet_bottom": point_to_dict(selected_heel),
+        "frame_homography": frame_details,
+        "stick_scale_check": stick_check,
+        "endpoint_method": "shared VGGHeads head-top and ViTPose heel landmarks",
+    }
