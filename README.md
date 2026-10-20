@@ -161,6 +161,27 @@ Without `--continue-on-error`, processing stops at the first failed image. With
 it, all images are attempted and the command still returns status `2` if any
 image failed.
 
+## Excel Batch Interface
+
+Place `Participant Heights.xlsx` in the repository root and participant photos
+in `inputs/`. If the workbook is missing, the command creates it with the
+expected headers and participant IDs from the selected images. Measured-height
+cells remain blank in a new workbook. Run the model-only frame and stick
+estimates with:
+
+```powershell
+height-estimation-excel
+```
+
+The command chooses each participant's `_2` image when present, otherwise `_1`.
+It writes the frame estimate from markers 0–3 and the stick estimate from
+markers 4 and 5 into the matching spreadsheet row. VGGHeads and ViTPose provide
+the body endpoints; the HOG fallback is disabled. Each estimate runs
+independently, so a failed method leaves its cell blank while other methods and
+images continue. The measured-height column is preserved, and estimate columns
+are refreshed on each run. Partial results are saved before the command returns
+status `2` when any image or method fails.
+
 ## Validation
 
 Install the test dependencies and run the checks from the repository root:

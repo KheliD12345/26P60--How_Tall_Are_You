@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26,<3",
     "opencv-contrib-python>=4.10,<5",
+    "openpyxl>=3.1,<4",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,7 @@ models = [
 
 [project.scripts]
 height-estimation = "height_estimation.cli:main"
+height-estimation-excel = "height_estimation.excel_runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
