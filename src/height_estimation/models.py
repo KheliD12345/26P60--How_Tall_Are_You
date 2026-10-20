@@ -371,6 +371,7 @@ class MarkerLayout:
     dictionary: str
     marker_size_cm: float
     markers: tuple[MarkerPosition, ...]
+    stick_reference_distance_cm: float = 81.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MarkerLayout":
@@ -392,6 +393,9 @@ class MarkerLayout:
                 dictionary=str(data["dictionary"]),
                 marker_size_cm=float(data["marker_size_cm"]),
                 markers=markers,
+                stick_reference_distance_cm=float(
+                    data.get("stick_reference_distance_cm", 81.0)
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("malformed marker layout configuration") from error
@@ -414,6 +418,13 @@ class MarkerLayout:
             raise ValueError(f"unknown ArUco dictionary: {self.dictionary}")
         if not isfinite(self.marker_size_cm) or self.marker_size_cm <= 0:
             raise ValueError("marker_size_cm must be greater than zero")
+        if (
+            not isfinite(self.stick_reference_distance_cm)
+            or self.stick_reference_distance_cm <= 0
+        ):
+            raise ValueError(
+                "stick_reference_distance_cm must be finite and greater than zero"
+            )
         if len(self.markers) < 2:
             raise ValueError("at least two marker positions are required")
         if len(set(self.marker_ids)) != len(self.marker_ids):

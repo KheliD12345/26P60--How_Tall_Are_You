@@ -1,6 +1,7 @@
 {
   "dictionary": "DICT_4X4_50",
   "marker_size_cm": 18,
+  "stick_reference_distance_cm": 81.0,
   "markers": [
     {"id": 0, "name": "top_left", "x_cm": 0.0, "y_cm": 191.5},
     {"id": 1, "name": "top_right", "x_cm": 105.5, "y_cm": 191.5},

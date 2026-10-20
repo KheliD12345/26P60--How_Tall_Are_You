@@ -36,6 +36,9 @@ calibration metadata.
 
 The hybrid images contain four frame tags and two pole tags. The experimental
 runner uses only pole tags 4 and 5, whose centre-to-centre distance is 81 cm:
+that distance is stored as `stick_reference_distance_cm` in both marker layout
+files. The AprilTag layout uses the same marker positions and size as
+`configs/marker_layout.json`; only its dictionary differs.
 
 ```powershell
 python experimental/apriltag_height_pipeline.py
