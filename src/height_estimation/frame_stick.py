@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import atan2, degrees, hypot, isfinite
+from pathlib import Path
 
+import cv2
 import numpy as np
 
+from .advanced_models import BodyDetections
 from .aruco import detect_markers_for_dictionary
+from .body_detection import BodyDetectionOrchestrator
 from .geometry import estimate_homography, transform_point
 from .models import DetectedMarker, MarkerLayout
 
@@ -92,6 +96,108 @@ def require_markers(
             f"missing required {label} IDs: {', '.join(map(str, missing))}"
         )
     return tuple(detections[marker_id] for marker_id in marker_ids)
+
+
+def detect_subject(
+    body_detector: BodyDetectionOrchestrator,
+    image: np.ndarray,
+) -> tuple[SubjectEndpoints, object]:
+    body_result = body_detector.detect(image)
+    detections: BodyDetections = body_result.detections
+    head = detections.head_top or detections.keypoints.get("head_top")
+    heels = detections.heel_landmarks()
+    if head is None or not heels:
+        details = "; ".join(body_result.diagnostics)
+        reason = "shared head-top and heel landmarks were not detected"
+        raise ValueError(f"{reason}: {details}" if details else reason)
+
+    height, width = image.shape[:2]
+    head_top = head.to_pixel(width, height)
+    heel_points = tuple(heel.to_pixel(width, height) for heel in heels)
+    return (
+        SubjectEndpoints(
+            head_top=head_top,
+            heel_points=heel_points,
+            confidence=detections.head_confidence,
+        ),
+        body_result,
+    )
+
+
+def write_overlay(
+    image: np.ndarray,
+    frame_markers: dict[int, MarkerDetection],
+    stick_markers: tuple[MarkerDetection, MarkerDetection] | None,
+    subject: SubjectEndpoints,
+    height: dict[str, object],
+    config: MarkerConfig,
+    output_path: Path,
+) -> None:
+    overlay = image.copy()
+    for marker in frame_markers.values():
+        points = np.asarray(marker.corners, dtype=np.int32).reshape((-1, 1, 2))
+        cv2.polylines(overlay, [points], True, (255, 160, 0), 3)
+        center = tuple(round(value) for value in marker.center)
+        cv2.circle(overlay, center, 7, (255, 160, 0), -1)
+        cv2.putText(
+            overlay,
+            f"Frame {marker.id}",
+            (center[0] + 10, center[1] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (180, 90, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
+    if stick_markers is not None:
+        for marker in stick_markers:
+            points = np.asarray(marker.corners, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(overlay, [points], True, (0, 180, 0), 3)
+            center = tuple(round(value) for value in marker.center)
+            cv2.circle(overlay, center, 7, (0, 180, 0), -1)
+            cv2.putText(
+                overlay,
+                f"{config.display_name} {marker.id}",
+                (center[0] + 10, center[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 120, 0),
+                2,
+                cv2.LINE_AA,
+            )
+        first_center = tuple(round(value) for value in stick_markers[0].center)
+        second_center = tuple(round(value) for value in stick_markers[1].center)
+        cv2.line(overlay, first_center, second_center, (0, 180, 0), 3)
+
+    head = tuple(round(value) for value in subject.head_top)
+    feet = tuple(round(value) for value in height["feet_bottom"].values())
+    cv2.circle(overlay, head, 8, (0, 0, 255), -1)
+    cv2.circle(overlay, feet, 8, (0, 0, 255), -1)
+    cv2.line(overlay, head, feet, (0, 0, 255), 3)
+
+    stick_check = height["stick_scale_check"]
+    label = (
+        f"height {height['height_cm']:.2f} cm | "
+        + (
+            f"stick check {stick_check['height_cm']:.2f} cm"
+            if stick_check is not None
+            else "stick check unavailable"
+        )
+    )
+    cv2.rectangle(overlay, (20, 20), (900, 65), (255, 255, 255), -1)
+    cv2.putText(
+        overlay,
+        label,
+        (30, 52),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.85,
+        (20, 20, 20),
+        2,
+        cv2.LINE_AA,
+    )
+    if not cv2.imwrite(str(output_path), overlay):
+        raise OSError(f"could not write overlay: {output_path}")
 
 
 def _detected_marker(marker: MarkerDetection) -> DetectedMarker:
