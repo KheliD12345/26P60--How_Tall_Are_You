@@ -29,7 +29,6 @@ from height_estimation.models import DetectedMarker, MarkerLayout
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REFERENCE_DISTANCE_CM = 81.0
 DEFAULT_MARKER_TYPE = "apriltag"
 FRAME_LAYOUT_PATH = SCRIPT_DIR.parent / "configs" / "apriltag_hybrid_layout.json"
 IMAGE_NAMES = (
@@ -204,10 +203,11 @@ def estimate_height(
         if reference_pixels <= 0.0:
             raise ValueError("reference marker centres must be separated in the image")
 
-        cm_per_pixel = REFERENCE_DISTANCE_CM / reference_pixels
+        reference_distance_cm = frame_layout.stick_reference_distance_cm
+        cm_per_pixel = reference_distance_cm / reference_pixels
         stick_height_cm = height_pixels * cm_per_pixel
         stick_check = {
-            "reference_distance_cm": REFERENCE_DISTANCE_CM,
+            "reference_distance_cm": reference_distance_cm,
             "reference_distance_px": round(reference_pixels, 3),
             "reference_delta_px": {
                 "x": round(reference_dx, 3),
