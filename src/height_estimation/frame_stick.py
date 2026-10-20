@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from math import atan2, degrees, hypot, isfinite
 from pathlib import Path
@@ -304,3 +305,85 @@ def estimate_height(
         "stick_scale_check": stick_check,
         "endpoint_method": "shared VGGHeads head-top and ViTPose heel landmarks",
     }
+
+
+def process_image(
+    body_detector: BodyDetectionOrchestrator,
+    image_path: Path,
+    output_dir: Path,
+    config: MarkerConfig,
+    frame_layout: MarkerLayout,
+) -> dict[str, object]:
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise OSError(f"could not read image: {image_path}")
+    frame_markers = detect_markers(
+        image,
+        frame_layout.dictionary,
+        frame_layout.marker_ids,
+    )
+    stick_detections = detect_markers(
+        image,
+        config.dictionary_name,
+        config.reference_ids,
+    )
+    stick_markers = (
+        tuple(stick_detections[marker_id] for marker_id in config.reference_ids)
+        if all(marker_id in stick_detections for marker_id in config.reference_ids)
+        else None
+    )
+    subject, body_result = detect_subject(body_detector, image)
+    frame_is_complete = all(
+        marker_id in frame_markers for marker_id in frame_layout.marker_ids
+    )
+    if not frame_is_complete and stick_markers is None:
+        require_markers(stick_detections, config.reference_ids, config.display_name)
+    height = estimate_height(frame_markers, stick_markers, subject, frame_layout)
+    result = {
+        "image": image_path.name,
+        "image_size_px": {"width": image.shape[1], "height": image.shape[0]},
+        "detector": {
+            "frame_marker_family": frame_layout.dictionary,
+            "frame_marker_ids": list(frame_layout.marker_ids),
+            "stick_marker_family": config.dictionary_name,
+            "stick_marker_ids": list(config.reference_ids),
+            "body_detectors": {
+                name: detector_result.status.value
+                for name, detector_result in body_result.detector_results.items()
+            },
+            "subject_confidence": round(subject.confidence, 4),
+        },
+        "frame_markers": [
+            {
+                "id": marker.id,
+                "center_px": point_to_dict(marker.center),
+                "area_px": round(marker.area_px, 2),
+                "corners_px": [point_to_dict(point) for point in marker.corners],
+            }
+            for marker in frame_markers.values()
+        ],
+        "stick_markers": [
+            {
+                "id": marker.id,
+                "center_px": point_to_dict(marker.center),
+                "area_px": round(marker.area_px, 2),
+                "corners_px": [point_to_dict(point) for point in marker.corners],
+            }
+            for marker in stick_detections.values()
+        ],
+        "estimate": height,
+        "body_detection_diagnostics": list(body_result.diagnostics),
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{image_path.stem}.json"
+    output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_overlay(
+        image,
+        frame_markers,
+        stick_markers,
+        subject,
+        height,
+        config,
+        output_dir / f"{image_path.stem}_overlay.jpg",
+    )
+    return result
