@@ -17,7 +17,7 @@ test = ["pytest>=8,<9"]
 models = [
     "mediapipe>=0.10.3",
     "scipy>=1.10.0",
-    "easy_ViTPose @ git+https://github.com/JunkyByte/easy_ViTPose.git",
+    "easy_ViTPose @ git+https://github.com/JunkyByte/easy_ViTPose.git@bb9860359e55b099a507c8000e360d48a27cc36d",
     "ultralytics>=8.0.0",
     "huggingface_hub>=0.20.0",
     "scikit-image>=0.24.0",

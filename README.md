@@ -3,18 +3,42 @@
 This project estimates human height from photographs using printed ArUco markers,
 image geometry, body evidence, and uncertainty-aware measurement fusion.
 
-## Setup
+## Quick Start
 
-Use Python 3.12 or newer. Install the package and its test dependencies from the
-project directory:
+Use Python 3.12 or newer. Create a project-local environment and install the
+core package:
 
 ```powershell
-python -m pip install -e ".[test]"
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
-The package uses OpenCV's contrib modules for ArUco marker detection. Optional
-model-backed detectors are not downloaded or imported automatically. The default
-pipeline can use the built-in OpenCV HOG/GrabCut person fallback.
+On macOS or Linux, create and activate the environment with:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Copy an image into the ignored `inputs/` directory, then run the measurement
+pipeline:
+
+```powershell
+height-estimation --pipeline --quality-policy continue `
+	--layout configs/marker_layout.json `
+	--output outputs/person-height.json `
+	inputs/person.jpg
+```
+
+The core install includes OpenCV's contrib modules for ArUco detection. The
+default pipeline uses the built-in HOG/GrabCut person fallback. Optional model
+packages must be installed separately; VGGHeads and ViTPose weights download
+when their detectors are first used. Images in `inputs/` and generated files in
+`outputs/` remain local and are not tracked.
 
 ## Calibration
 
@@ -81,7 +105,7 @@ Use `--no-person-fallback` to require configured model-backed body detectors.
 This is useful for verifying detector availability without silently using the
 OpenCV fallback.
 
-## Optional Model Adapters
+## Model-Backed Detections
 
 Install the model dependencies and test tools with:
 
@@ -89,52 +113,35 @@ Install the model dependencies and test tools with:
 python -m pip install -e ".[models,test]"
 ```
 
-The adapters also require the external detector source modules containing
-`vitpose_detection`, `vggheads_detection`, and `mediapipe_detection` to be
-available through the normal Python environment. The application does not
-modify `sys.path` at runtime.
+The VGGHeads and ViTPose detector implementations are included in `src/`.
+Their pinned weights are downloaded on first use into
+`%USERPROFILE%\.cache\height-estimation`. Set `HEIGHT_ESTIMATION_MODEL_CACHE`
+to use another shared location.
 
-Optional model adapters can be enabled from the CLI. They are constructed
-lazily on first inference call:
+The model-only frame/stick runner below uses VGGHeads and ViTPose, disables the
+HOG fallback, and reports whether both detectors succeeded:
 
 ```powershell
-python -m height_estimation --pipeline --model-detectors `
-	--quality-policy continue `
-	person.jpg --layout configs/marker_layout.json
+python experimental\apriltag_height_pipeline.py `
+	--marker-type aruco `
+	--reference-ids 4 5 `
+	--frame-layout configs\marker_layout.json `
+	--output-dir outputs\model-run `
+	inputs\P001_1.jpg inputs\P002_1.jpg inputs\P003_1.jpg
 ```
 
-They can also be wired explicitly through `PipelineConfig` when external
-detector packages are available.
+The main pipeline can also request the model adapters explicitly:
 
-```python
-from height_estimation.body_detection import (
-	BodyDetectionConfig,
-	MediaPipeHandDetectorAdapter,
-	MediaPipeSegmentationAdapter,
-	VGGHeadsDetectorAdapter,
-	ViTPoseDetectorAdapter,
-)
-from height_estimation.pipeline import PipelineConfig
-
-config = PipelineConfig(
-	use_person_fallback=True,
-	body_detection=BodyDetectionConfig(
-		pose_detector=ViTPoseDetectorAdapter(),
-		head_detector=VGGHeadsDetectorAdapter(),
-		segmentation_detector=MediaPipeSegmentationAdapter(),
-		hand_detector=MediaPipeHandDetectorAdapter(),
-	),
-)
+```powershell
+height-estimation --pipeline --model-detectors --no-person-fallback `
+	--layout configs/marker_layout.json `
+	--output outputs/model-result.json `
+	inputs/P001_1.jpg
 ```
 
-When an optional dependency or model file is unavailable, the corresponding
-detector returns an unavailable status and the pipeline continues to use
-available evidence. Runtime detector errors remain failure statuses and are
-included in diagnostics.
-
-Model weights are downloaded by the external detector implementations when
-first used. Configure model paths and network access before running a
-model-backed pipeline.
+`--no-person-fallback` prevents HOG/GrabCut from substituting for unavailable
+models. Optional MediaPipe segmentation and hand detectors are not required by
+the frame/stick runner.
 
 ## Batch Processing
 
@@ -156,10 +163,10 @@ image failed.
 
 ## Validation
 
-Run the complete test suite from this directory:
+Install the test dependencies and run the checks from the repository root:
 
 ```powershell
+python -m pip install -e ".[test]"
 python -m pytest -q
 python -m compileall -q src tests
-
 ```
