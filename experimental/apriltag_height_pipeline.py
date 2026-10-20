@@ -9,14 +9,13 @@ reported as a calibration check.
 from __future__ import annotations
 import argparse
 import json
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from height_estimation.advanced_models import BodyDetections
-from height_estimation.aruco import detect_markers_for_dictionary
 from height_estimation.body_detection import (
     BodyDetectionConfig,
     BodyDetectionOrchestrator,
@@ -24,83 +23,25 @@ from height_estimation.body_detection import (
     VGGHeadsDetectorAdapter,
 )
 from height_estimation.frame_stick import (
+    DEFAULT_MARKER_TYPE,
+    MARKER_CONFIGS,
+    MarkerConfig,
     MarkerDetection,
     SubjectEndpoints,
+    detect_markers,
     estimate_height,
     point_to_dict,
+    require_markers,
 )
 from height_estimation.models import MarkerLayout
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_MARKER_TYPE = "apriltag"
 FRAME_LAYOUT_PATH = SCRIPT_DIR.parent / "configs" / "apriltag_hybrid_layout.json"
 IMAGE_NAMES = (
     "ApriltagHybrid1.jpg",
     "ApriltagHybrid2.jpg",
 )
-
-
-@dataclass(frozen=True)
-class MarkerConfig:
-    marker_type: str
-    dictionary_name: str
-    display_name: str
-    reference_ids: tuple[int, int]
-    marker_size_cm: float
-
-
-MARKER_CONFIGS = {
-    "aruco": MarkerConfig(
-        marker_type="aruco",
-        dictionary_name="DICT_4X4_50",
-        display_name="ArUco",
-        reference_ids=(0, 1),
-        marker_size_cm=18.0,
-    ),
-    "apriltag": MarkerConfig(
-        marker_type="apriltag",
-        dictionary_name="DICT_APRILTAG_36h11",
-        display_name="AprilTag",
-        reference_ids=(4, 5),
-        marker_size_cm=18.0,
-    ),
-}
-
-
-def detect_markers(
-    image: np.ndarray,
-    dictionary_name: str,
-    marker_ids: tuple[int, ...],
-) -> dict[int, MarkerDetection]:
-    markers = detect_markers_for_dictionary(
-        image,
-        dictionary_name,
-        required_ids=marker_ids,
-    )
-    return {
-        marker.id: MarkerDetection(
-            id=marker.id,
-            corners=marker.corners,
-            center=(marker.center_x, marker.center_y),
-            area_px=marker.area_px,
-        )
-        for marker in markers
-        if marker.id in marker_ids
-    }
-
-
-def require_markers(
-    detections: dict[int, MarkerDetection],
-    marker_ids: tuple[int, ...],
-    label: str,
-) -> tuple[MarkerDetection, ...]:
-    missing = [marker_id for marker_id in marker_ids if marker_id not in detections]
-    if missing:
-        raise ValueError(
-            f"missing required {label} IDs: {', '.join(map(str, missing))}"
-        )
-    return tuple(detections[marker_id] for marker_id in marker_ids)
 
 
 def detect_subject(
