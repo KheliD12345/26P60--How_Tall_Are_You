@@ -6,13 +6,18 @@ import json
 from dataclasses import dataclass
 from math import atan2, degrees, hypot, isfinite
 from pathlib import Path
+from typing import TypedDict
 
 import cv2
 import numpy as np
 
-from .advanced_models import BodyDetections
+from .advanced_models import BodyDetections, Landmark
 from .aruco import detect_markers_for_dictionary
-from .body_detection import BodyDetectionOrchestrator
+from .body_detection import (
+    BodyDetectionOrchestrator,
+    BodyDetectionResult,
+    DetectionStatus,
+)
 from .geometry import estimate_homography, transform_point
 from .models import DetectedMarker, MarkerLayout
 
@@ -41,6 +46,44 @@ class SubjectEndpoints:
     confidence: float
 
 
+class PixelPoint(TypedDict):
+    x_px: float
+    y_px: float
+
+
+class MetricPoint(TypedDict):
+    x: float
+    y: float
+
+
+class FrameHomographyEstimate(TypedDict):
+    height_cm: float
+    reprojection_error_cm: float
+    head_top_cm: MetricPoint
+    feet_bottom_cm: MetricPoint
+
+
+class StickScaleEstimate(TypedDict):
+    reference_distance_cm: float
+    reference_distance_px: float
+    reference_delta_px: MetricPoint
+    reference_axis_angle_degrees: float
+    cm_per_pixel: float
+    height_cm: float
+    difference_from_frame_homography_cm: float | None
+
+
+class FrameStickEstimate(TypedDict):
+    method: str
+    height_cm: float
+    subject_height_pixels: float
+    head_top: PixelPoint
+    feet_bottom: PixelPoint
+    frame_homography: FrameHomographyEstimate | None
+    stick_scale_check: StickScaleEstimate | None
+    endpoint_method: str
+
+
 DEFAULT_MARKER_TYPE = "apriltag"
 MARKER_CONFIGS = {
     "aruco": MarkerConfig(
@@ -60,7 +103,7 @@ MARKER_CONFIGS = {
 }
 
 
-def point_to_dict(point: tuple[float, float]) -> dict[str, float]:
+def point_to_dict(point: tuple[float, float]) -> PixelPoint:
     return {"x_px": round(point[0], 3), "y_px": round(point[1], 3)}
 
 
@@ -102,10 +145,12 @@ def require_markers(
 def detect_subject(
     body_detector: BodyDetectionOrchestrator,
     image: np.ndarray,
-) -> tuple[SubjectEndpoints, object]:
+) -> tuple[SubjectEndpoints, BodyDetectionResult]:
     body_result = body_detector.detect(image)
     detections: BodyDetections = body_result.detections
-    head = detections.head_top or detections.keypoints.get("head_top")
+    head = detections.head_top
+    if head is None:
+        head = detections.keypoints.get("head_top")
     heels = detections.heel_landmarks()
     if head is None or not heels:
         details = "; ".join(body_result.diagnostics)
@@ -113,7 +158,7 @@ def detect_subject(
         raise ValueError(f"{reason}: {details}" if details else reason)
 
     height, width = image.shape[:2]
-    head_top = head.to_pixel(width, height)
+    head_top = Landmark.from_value(head).to_pixel(width, height)
     heel_points = tuple(heel.to_pixel(width, height) for heel in heels)
     return (
         SubjectEndpoints(
@@ -130,7 +175,7 @@ def write_overlay(
     frame_markers: dict[int, MarkerDetection],
     stick_markers: tuple[MarkerDetection, MarkerDetection] | None,
     subject: SubjectEndpoints,
-    height: dict[str, object],
+    height: FrameStickEstimate,
     config: MarkerConfig,
     output_path: Path,
 ) -> None:
@@ -172,7 +217,8 @@ def write_overlay(
         cv2.line(overlay, first_center, second_center, (0, 180, 0), 3)
 
     head = tuple(round(value) for value in subject.head_top)
-    feet = tuple(round(value) for value in height["feet_bottom"].values())
+    feet_bottom = height["feet_bottom"]
+    feet = (round(feet_bottom["x_px"]), round(feet_bottom["y_px"]))
     cv2.circle(overlay, head, 8, (0, 0, 255), -1)
     cv2.circle(overlay, feet, 8, (0, 0, 255), -1)
     cv2.line(overlay, head, feet, (0, 0, 255), 3)
@@ -216,9 +262,9 @@ def estimate_height(
     stick_markers: tuple[MarkerDetection, MarkerDetection] | None,
     subject: SubjectEndpoints,
     frame_layout: MarkerLayout,
-) -> dict[str, object]:
+) -> FrameStickEstimate:
     frame_height: float | None = None
-    frame_details: dict[str, object] | None = None
+    frame_details: FrameHomographyEstimate | None = None
     selected_heel = max(subject.heel_points, key=lambda point: point[1])
     if all(marker_id in frame_markers for marker_id in frame_layout.marker_ids):
         detected = tuple(
@@ -251,7 +297,7 @@ def estimate_height(
         }
 
     height_pixels = abs(selected_heel[1] - subject.head_top[1])
-    stick_check: dict[str, object] | None = None
+    stick_check: StickScaleEstimate | None = None
     if stick_markers is not None:
         first_center, second_center = stick_markers[0].center, stick_markers[1].center
         reference_dx = second_center[0] - first_center[0]
@@ -289,7 +335,12 @@ def estimate_height(
         )
 
     # Frame homography takes priority; stick distance is the fallback.
-    height_cm = frame_height if frame_height is not None else stick_check["height_cm"]
+    if frame_height is None:
+        if stick_check is None:
+            raise ValueError("neither frame nor stick markers produced an estimate")
+        height_cm = stick_check["height_cm"]
+    else:
+        height_cm = frame_height
     if not isfinite(height_cm) or height_cm <= 0:
         raise ValueError("height estimate must be finite and greater than zero")
     return {
@@ -328,11 +379,10 @@ def process_image(
         config.dictionary_name,
         config.reference_ids,
     )
-    stick_markers = (
-        tuple(stick_detections[marker_id] for marker_id in config.reference_ids)
-        if all(marker_id in stick_detections for marker_id in config.reference_ids)
-        else None
-    )
+    stick_markers: tuple[MarkerDetection, MarkerDetection] | None = None
+    if all(marker_id in stick_detections for marker_id in config.reference_ids):
+        first_id, second_id = config.reference_ids
+        stick_markers = (stick_detections[first_id], stick_detections[second_id])
     subject, body_result = detect_subject(body_detector, image)
     frame_is_complete = all(
         marker_id in frame_markers for marker_id in frame_layout.marker_ids
@@ -349,7 +399,7 @@ def process_image(
             "stick_marker_family": config.dictionary_name,
             "stick_marker_ids": list(config.reference_ids),
             "body_detectors": {
-                name: detector_result.status.value
+                name: DetectionStatus(detector_result.status).value
                 for name, detector_result in body_result.detector_results.items()
             },
             "subject_confidence": round(subject.confidence, 4),
