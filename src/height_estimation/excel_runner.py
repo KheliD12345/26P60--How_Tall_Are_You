@@ -43,6 +43,10 @@ STICK_MARKER_IDS = (4, 5)
 IMAGE_SUFFIXES = frozenset({".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"})
 PARTICIPANT_PREFIX = re.compile(r"^P(?P<number>\d+)(?:$|[^A-Za-z0-9])", re.IGNORECASE)
 PARTICIPANT_ID = re.compile(r"^P(?P<number>\d+)$", re.IGNORECASE)
+PARTICIPANT_VIEW = re.compile(
+    r"^P(?P<number>\d+)_(?P<view>[12])$",
+    re.IGNORECASE,
+)
 IMAGE_ERRORS = (OSError, ValueError, RuntimeError, ImportError, cv2.error)
 WORKBOOK_HEADERS = (
     "Participant Number",
@@ -95,9 +99,26 @@ def discover_images(input_dir: Path) -> list[ParticipantImage]:
     if not paths:
         raise ValueError(f"no supported images found in {input_dir}")
 
+    preferred_view_two: set[str] = set()
+    for path in paths:
+        view_match = PARTICIPANT_VIEW.fullmatch(path.stem)
+        if view_match is not None and view_match.group("view") == "2":
+            preferred_view_two.add(
+                f"P{int(view_match.group('number')):03d}"
+            )
+
     labelled: dict[Path, str] = {}
     used_ids: dict[str, Path] = {}
+    ignored_view_ones: set[Path] = set()
     for path in paths:
+        view_match = PARTICIPANT_VIEW.fullmatch(path.stem)
+        if (
+            view_match is not None
+            and view_match.group("view") == "1"
+            and f"P{int(view_match.group('number')):03d}" in preferred_view_two
+        ):
+            ignored_view_ones.add(path)
+            continue
         match = PARTICIPANT_PREFIX.match(path.stem)
         if match is None:
             continue
@@ -115,6 +136,8 @@ def discover_images(input_dir: Path) -> list[ParticipantImage]:
     selections: list[ParticipantImage] = []
     next_number = 1
     for path in paths:
+        if path in ignored_view_ones:
+            continue
         participant_id = labelled.get(path)
         if participant_id is None:
             participant_id = f"P{next_number:03d}"
