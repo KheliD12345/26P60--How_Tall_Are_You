@@ -1,162 +1,102 @@
 # Height Estimation
 
-This project estimates human height from photographs using printed ArUco markers,
-image geometry, body evidence, and uncertainty-aware measurement fusion.
+Estimate height from photos using ArUco frame markers, stick markers, VGGHeads,
+and ViTPose.
 
-## Setup
+## Quick start
 
-Use Python 3.12 or newer. Install the package and its test dependencies from the
-project directory:
-
-```powershell
-python -m pip install -e ".[test]"
-```
-
-The package uses OpenCV's contrib modules for ArUco marker detection. Optional
-model-backed detectors are not downloaded or imported automatically. The default
-pipeline can use the built-in OpenCV HOG/GrabCut person fallback.
-
-## Calibration
-
-Calibration-only mode remains available for marker inspection and is the default
-when `--pipeline` is omitted:
+Use Python 3.12 or newer. In PowerShell, install the project and model support:
 
 ```powershell
-python -m height_estimation person.jpg `
-	--layout configs/marker_layout.json `
-	--output outputs/calibration.json `
-	--overlay outputs/calibration.png
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[models]"
 ```
 
-The calibration JSON contains detected markers, marker-pair geometry, the
-centimetres-per-pixel scale, homography diagnostics, and optional camera
-calibration metadata.
-
-## Hybrid AprilTag Layout
-
-The hybrid images contain four frame tags and two pole tags. The experimental
-runner uses only pole tags 4 and 5, whose centre-to-centre distance is 81 cm:
+Put supported photos in `inputs/`, then run either batch command:
 
 ```powershell
-python experimental/apriltag_height_pipeline.py
+height-estimation-json
+height-estimation-excel
 ```
 
-The main pipeline uses the AprilTag layout for frame tags 0 to 3:
+Both commands use the ArUco layout in `configs/marker_layout.json`, check frame
+markers 0–3 and stick markers 4–5, and use VGGHeads and ViTPose for body
+endpoints. The HOG fallback is disabled. Each estimate is attempted
+independently; a missing marker set leaves only that method's result blank.
+Partial outputs are saved, and the command returns status `2` if any image or
+method fails.
+
+`height-estimation-json` writes one file per participant to `outputs/`, with
+`geometric_height_cm` retained as the frame-first primary result (stick fallback)
+and separate `frame_estimated_height_cm` and `stick_estimated_height_cm` fields.
+`height-estimation-excel` creates or updates
+`outputs/Participant Heights.xlsx`; it preserves measured heights and refreshes
+the frame and stick estimate columns. Both accept `--input-dir`; the JSON
+command also accepts `--output-dir`, and the Excel command accepts `--workbook`.
+
+Images are processed in case-insensitive filename order. A filename beginning
+with `P<number>` keeps that participant number. Other names receive the next
+unused ID, starting at `P001`; duplicate participant IDs are rejected. Model
+weights download on first use to `%USERPROFILE%\.cache\height-estimation`.
+Set `HEIGHT_ESTIMATION_MODEL_CACHE` to use another cache directory.
+
+## Legacy CLI
+
+`height-estimation` remains available for calibration and the geometric-only
+pipeline. Without `--pipeline`, it inspects markers; with `--pipeline`, it runs
+the legacy full pipeline. For calibration-only inspection:
 
 ```powershell
-python -m height_estimation --pipeline --batch `
-	--quality-policy continue `
-	--layout configs/apriltag_hybrid_layout.json `
-	--output-dir outputs/apriltag-hybrid `
-	inputs/ApriltagHybrid1.jpg inputs/ApriltagHybrid2.jpg
+height-estimation inputs/person.jpg `
+    --layout configs/marker_layout.json `
+    --output outputs/calibration.json `
+    --overlay outputs/calibration.png
 ```
 
-The main calibration stage ignores detected marker IDs that are not declared
-by the selected layout, so pole tags 4 and 5 do not enter the frame homography.
-
-## Full Pipeline
-
-Run the complete single-image pipeline explicitly with `--pipeline`:
+For one geometric height result:
 
 ```powershell
-python -m height_estimation --pipeline person.jpg `
-	--layout configs/marker_layout.json `
-	--quality-policy fail `
-	--output outputs/person-height.json `
-	--overlay outputs/person-overlay.png
+height-estimation --pipeline inputs/person.jpg `
+    --layout configs/marker_layout.json `
+    --quality-policy continue `
+    --output outputs/person-height.json
 ```
 
-The final JSON reports `geometric_height_cm` and acquisition quality. The
-pipeline does not generate head-bounding-box estimates or fuse measurements.
-The process exits with status `2` when a typed pipeline failure occurs. Use
-`--quality-policy continue` to retain a result when the quality gate reports
-warnings.
-
-Only the direct geometric estimate is included in pipeline results.
-
-Use `--no-person-fallback` to require configured model-backed body detectors.
-This is useful for verifying detector availability without silently using the
-OpenCV fallback.
-
-## Optional Model Adapters
-
-Install the model dependencies and test tools with:
+The legacy batch form accepts explicit image paths:
 
 ```powershell
-python -m pip install -e ".[models,test]"
+height-estimation --pipeline --batch --continue-on-error `
+    --layout configs/marker_layout.json `
+    --output-dir outputs/legacy `
+    inputs/one.jpg inputs/two.jpg
 ```
 
-The adapters also require the external detector source modules containing
-`vitpose_detection`, `vggheads_detection`, and `mediapipe_detection` to be
-available through the normal Python environment. The application does not
-modify `sys.path` at runtime.
+Command options:
 
-Optional model adapters can be enabled from the CLI. They are constructed
-lazily on first inference call:
+- `--layout`: marker layout JSON; defaults to `configs/marker_layout.json`.
+- `--version`: print the installed package version.
+- `--pipeline`: run height estimation instead of calibration-only inspection.
+- `--batch`: allow multiple positional images; requires `--pipeline`.
+- `--output` / `--output-dir`: choose a single result file or batch directory.
+- `--continue-on-error`: attempt remaining batch images after a failure.
+- `--quality-policy fail|continue`: stop or continue when quality checks fail.
+- `--camera-calibration`: provide camera calibration for undistortion.
+- `--overlay`: write a calibration or pipeline overlay image.
+- `--model-detectors`: opt into optional model detectors in the legacy pipeline.
+- `--no-person-fallback`: disable its HOG/GrabCut fallback.
 
-```powershell
-python -m height_estimation --pipeline --model-detectors `
-	--quality-policy continue `
-	person.jpg --layout configs/marker_layout.json
-```
-
-They can also be wired explicitly through `PipelineConfig` when external
-detector packages are available.
-
-```python
-from height_estimation.body_detection import (
-	BodyDetectionConfig,
-	MediaPipeHandDetectorAdapter,
-	MediaPipeSegmentationAdapter,
-	VGGHeadsDetectorAdapter,
-	ViTPoseDetectorAdapter,
-)
-from height_estimation.pipeline import PipelineConfig
-
-config = PipelineConfig(
-	use_person_fallback=True,
-	body_detection=BodyDetectionConfig(
-		pose_detector=ViTPoseDetectorAdapter(),
-		head_detector=VGGHeadsDetectorAdapter(),
-		segmentation_detector=MediaPipeSegmentationAdapter(),
-		hand_detector=MediaPipeHandDetectorAdapter(),
-	),
-)
-```
-
-When an optional dependency or model file is unavailable, the corresponding
-detector returns an unavailable status and the pipeline continues to use
-available evidence. Runtime detector errors remain failure statuses and are
-included in diagnostics.
-
-Model weights are downloaded by the external detector implementations when
-first used. Configure model paths and network access before running a
-model-backed pipeline.
-
-## Batch Processing
-
-Batch mode accepts multiple image paths and writes one result per image. By
-default, results are written below `outputs`; provide `--output-dir` to choose a
-different directory:
-
-```powershell
-python -m height_estimation --pipeline --batch `
-	--layout configs/marker_layout.json `
-	--output-dir outputs/batch `
-	--continue-on-error `
-	person-one.jpg person-two.jpg
-```
-
-Without `--continue-on-error`, processing stops at the first failed image. With
-it, all images are attempted and the command still returns status `2` if any
-image failed.
+The experimental `experimental/apriltag_height_pipeline.py` runner accepts
+explicit image paths. Its `--marker-type`, `--reference-ids`, `--frame-layout`,
+and `--output-dir` options configure AprilTag/ArUco comparisons.
 
 ## Validation
 
-Run the complete test suite from this directory:
+Install test dependencies and run from the repository root:
 
 ```powershell
+python -m pip install -e ".[test]"
 python -m pytest -q
 python -m compileall -q src tests
-
 ```

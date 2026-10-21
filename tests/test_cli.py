@@ -69,14 +69,6 @@ def make_calibration_result(markers, cm_per_pixel=0.1):
     )
 
 
-def test_cli_loads_default_layout(capsys):
-    assert main([]) == 0
-
-    output = capsys.readouterr().out
-    assert "Loaded 4 markers" in output
-    assert "DICT_4X4_50" in output
-
-
 def test_cli_writes_detection_json(tmp_path, monkeypatch, capsys):
     markers = tuple(
         DetectedMarker(

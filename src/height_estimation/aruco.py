@@ -53,6 +53,7 @@ def detect_markers_for_dictionary(
     )
     detected_by_id: dict[int, tuple[float, DetectedMarker]] = {}
     required = set(required_ids)
+    # Scale passes can expose marker corners missed at input resolution.
     for scale in _DETECTION_SCALES:
         interpolations = (
             (None,)
