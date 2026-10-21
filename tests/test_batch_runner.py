@@ -41,7 +41,9 @@ def test_discover_images_sorts_fallback_ids_and_preserves_participant_labels(
     mixed_dir = tmp_path / "mixed"
     mixed_dir.mkdir()
     (mixed_dir / "a-photo.jpg").touch()
+    (mixed_dir / "P001_1.jpg").touch()
     (mixed_dir / "P001_2.jpg").touch()
+    (mixed_dir / "P010_1.jpg").touch()
     (mixed_dir / "z-photo.jpg").touch()
 
     mixed_selections = excel_runner.discover_images(mixed_dir)
@@ -49,6 +51,7 @@ def test_discover_images_sorts_fallback_ids_and_preserves_participant_labels(
     assert [(item.participant_id, item.path.name) for item in mixed_selections] == [
         ("P002", "a-photo.jpg"),
         ("P001", "P001_2.jpg"),
+        ("P010", "P010_1.jpg"),
         ("P003", "z-photo.jpg"),
     ]
     (mixed_dir / "P0001-copy.jpg").touch()
